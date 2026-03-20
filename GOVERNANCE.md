@@ -1,0 +1,570 @@
+# Governance
+
+### Implementation readiness
+
+| Section | Status |
+|---|---|
+| Voting Power (checkpointing, delegation, quorum) | Ready |
+| Proposal Lifecycle (standard/extended, bond, threshold) | Ready |
+| Parameters | Ready |
+| Scope (governable vs immutable) | Ready |
+| Treasury Outflow Limits | Ready |
+| Contract Upgrade Scope / Adapter Registry | Ready |
+| Security Council (powers, veto, ratification, ejection) | Ready |
+| Treasury Steward (role, budget, defeat quorum, compensation) | Ready |
+| Wind-Down (trigger, sequence, redemption, post-wind-down) | Ready |
+| Treasury Distributions (operational, buyback, wind-down redemption) | Ready (buyback module deferred — not required at launch) |
+| Fee Structure | See FEE_STRUCTURE.md |
+| Token Distribution | See ARM_TOKEN.md |
+
+---
+
+## Model
+
+**Proposals fail by default unless they achieve majority quorum.**
+
+Anyone can propose. Only proposals with genuine support pass.
+
+---
+
+## Voting Power
+
+### How it works
+
+ARM tokens vote directly — no locking required. Voting power equals your token balance at a fixed snapshot block, regardless of what you do with your tokens afterward.
+
+**Token balances are checkpointed continuously.** Every time ARM moves — through a transfer, a claim, or a delegation change — the token contract records a new checkpoint for that address. When a proposal is created, the snapshot is fixed at `block.number - 1`. All voting power calculations for that proposal use the checkpoints at that block, permanently. Nothing that happens after the snapshot affects that vote.
+
+This means:
+- You can vote and then sell. Your voting power was already fixed.
+- You cannot buy ARM after a proposal is created and use it on that vote.
+- Flash loan attacks are structurally impossible — borrowed tokens have no checkpoint history.
+- When tokens transfer, the sender's delegated voting power decreases and the recipient starts undelegated. Secondary market activity naturally refreshes delegation state.
+
+### Delegation
+
+**Voting power is inactive until delegated.** To participate in governance — either by voting directly or contributing your weight to a delegate — you must assign a delegatee. This is a one-time transaction that can be changed at any time.
+
+| Option | Who votes | When to use |
+|--------|-----------|-------------|
+| Self-delegate | You vote directly | Active governance participants |
+| Delegate to another address | Your delegate votes on your behalf | Passive holders who trust a representative |
+| Delegate to abstain address | Tokens count toward quorum; no votes cast | Holders who want their weight in the denominator without participating |
+
+Delegation is free to change at any time. Redelegating takes effect for proposals created after the next block.
+
+**Votes can be changed during the voting period.** A voter may switch between FOR, AGAINST, and ABSTAIN at any time while voting is active. Only the final vote state at voting close counts. This encourages early participation — voters aren't penalized for updating their position as discussion evolves. **Votes cannot be withdrawn entirely** — once cast, the voter's weight counts toward quorum regardless of subsequent switches. This means quorum only increases during voting, preventing quorum manipulation (vote to push above threshold, then withdraw to drop below).
+
+**One level of delegation only.** A delegate cannot redelegate to a third party. Voting power terminates at the delegatee.
+
+### Delegation-at-circulation requirement
+
+**Launch circulation paths enforce atomic delegation.** Both the crowdfund `claim(delegate)` and the revenue-lock `release(delegate)` require a `delegatee` parameter. Self-delegation is valid; it is still an explicit choice. ARM entering circulation through these paths is immediately active in the governance denominator.
+
+**Treasury distributions do not enforce atomic delegation.** When governance approves a treasury transfer (ARM sent from the whitelisted treasury to a recipient), the recipient receives standard undelegated ARM. They must call `delegate()` themselves. Until they do, that ARM is circulating but vote-inert. This is a known property — the treasury transfer path is a standard ERC-20 transfer, not a `delegateOnBehalf` path. The practical impact is bounded: treasury distributions require governance approval (subject to outflow limits), and recipients are expected to delegate as part of participating in the protocol.
+
+**If you plan to receive delegation from others:** call `delegate(yourAddress)` before those delegators claim. This establishes your checkpoint history.
+
+### Known limitation: stale delegations
+
+Delegation persists until actively revoked. Original holders who set delegation at claim time and go dark give their delegates permanent voting weight with no expiry mechanism. This is a known property of Compound-style governance and is not currently solved by Armada. Mitigation relies on competitive redelegation dynamics — if a delegate behaves badly, active holders redelegate away — and on the crowdfund cohort being small and warm at launch. A delegation expiry mechanism may be introduced via governance as the protocol matures.
+
+### Quorum denominator
+
+Quorum is measured as a percentage of **circulating voting power at the snapshot block**.
+
+In plain terms: quorum denominator = ARM that is unlocked, in circulation, and delegated.
+
+**Included:**
+- All claimed crowdfund tokens (delegated atomically at claim)
+- Team and airdrop tokens that have cleared their revenue milestone and been released (delegated atomically at release)
+- Any ARM distributed from treasury, once the recipient delegates (treasury transfers do not enforce atomic delegation — see §Delegation-at-circulation requirement)
+
+**Not included:**
+- Treasury ARM (never votes)
+- Revenue-locked team/airdrop tokens not yet unlocked
+- Allocated-but-unclaimed crowdfund tokens (vote-inert until claimed)
+
+Both the numerator (votes cast) and the denominator (circulating voting power) are snapshotted at proposal creation. A batch of revenue-milestone unlocks mid-vote cannot move the goalposts.
+
+### Attack surface
+
+**Accumulate-before-snapshot, vote, sell:** An attacker buys ARM before the snapshot block, votes, then dumps. Cost is real capital exposed during at minimum the 48-hour proposal delay plus the voting period — 9+ days at standard, 16+ days at extended. The treasury outflow rate limits (see §Treasury Outflow Limits) are the primary defense against the capture loop — even a successfully passed malicious proposal can only extract limited value per window.
+
+**Quorum suppression:** A large holder never delegates, keeping their tokens out of the denominator. This shrinks the absolute quorum threshold, making it easier for a small coalition to pass proposals. Mitigation: claim-time delegation requirement prevents tokens from sitting completely inert.
+
+---
+
+## Proposal Lifecycle
+
+```
+1. DRAFT    → Proposer creates; 1,000 ARM bond posted (bond waived pre-transfer-unlock; see below)
+2. PENDING  → 48-hour visibility window (proposer can cancel; community sees it coming)
+3. ACTIVE   → Voting open: FOR / AGAINST / ABSTAIN (votes changeable during this period)
+              Standard:  7 days
+              Extended: 14 days
+4. OUTCOME  → DEFEATED (quorum not met, or majority AGAINST)
+            → SUCCEEDED (quorum met + majority FOR)
+5. QUEUED   → Execution delay — Security Council may veto during this window (see §Security Council)
+              Standard: 48 hours
+              Extended:  7 days
+6. EXECUTED → On-chain, irreversible
+```
+
+### Proposal bond
+
+A bond of **1,000 ARM** is posted at submission.
+
+| Outcome | Bond treatment |
+|---------|---------------|
+| Passed | Unlocked immediately after passing |
+| Quorum not met | Locked 15 days, then returned |
+| Voted down (majority AGAINST) | Locked 45 days, then returned |
+
+Bond is always returned — it is never permanently slashed. The lock period is the cost of a failed proposal, calibrated to the severity of the failure.
+
+**Pre-transfer-unlock exception:** Posting a bond requires transferring ARM to the governance contract. While ARM transfers are globally restricted (see ARM_TOKEN.md §5), non-whitelisted holders cannot transfer — so bonds are technically impossible. They are also economically meaningless: "losing access" to non-transferable ARM has zero opportunity cost. **Before global transfer unlock, governance operates on proposal threshold only (12,000 delegated ARM). No bond is required.** This avoids a chicken-and-egg problem: the proposal to enable transfers must itself be creatable without a bond. The bond mechanism activates naturally once governance enables transfers.
+
+### Proposal threshold
+
+**12,000 ARM** (0.1% of 12M total supply) must be held at snapshot to submit a proposal. An address that cannot meet the threshold can receive delegation from others to qualify.
+
+### Standard vs. extended classification
+
+A proposal is automatically **extended** if it touches any of the following:
+
+- Any fee parameter (shield fee, yield fee, volume tiers) — increases or decreases
+- Treasury allocation exceeding 5% of current treasury balance
+- Governance parameter changes (quorum, quorum floor, voting period, execution delay, bond, threshold)
+- Treasury Steward election or removal
+- Security Council seat changes via governance
+
+All other proposals are **standard**.
+
+Classification is determined mechanically by the function selectors in the proposal calldata, not by proposer self-declaration.
+
+**Note: veto ratification votes** (see §Security Council) are a third proposal category with distinct parameters — they are triggered automatically when the SC vetoes a queued proposal, have a fixed 7-day voting period, use standard quorum, and carry the unique side effect of SC ejection on AGAINST outcome. The governor contract must implement this as a separate proposal type alongside standard and extended.
+
+---
+
+## Parameters
+
+| Parameter | Standard | Extended |
+|-----------|----------|----------|
+| Proposal threshold | 12,000 ARM | 12,000 ARM |
+| Bond | 1,000 ARM | 1,000 ARM |
+| Quorum | max(20% of circulating voting power, 100,000 ARM) | max(30% of circulating voting power, 100,000 ARM) |
+| Proposal delay | 48 hours | 48 hours |
+| Voting period | 7 days | 14 days |
+| Execution delay | 48 hours | 7 days |
+| Governance quiet period | 7 days post-crowdfund finalization | — (one-time only) |
+
+**Quorum floor: 100,000 ARM.** Quorum is the greater of the percentage-based threshold and this absolute floor. This prevents governance passing on near-zero turnout regardless of how much ARM has been claimed and delegated at any given time. At the base raise of 1.2M ARM, 100,000 ARM represents ~8.3% of the crowdfund allocation — meaningful coordinated participation.
+
+**Governance quiet period.** No proposals may be submitted for the first 7 days after crowdfund finalization. This is a one-time bootstrapping measure giving the community time to claim, delegate, and orient before governance begins. Any emergency during this window is handled by the Security Council.
+
+All parameters are themselves governable via extended proposal.
+
+---
+
+## Scope
+
+### Governable
+
+| Category | Items | Proposal type |
+|----------|-------|---------------|
+| **Fees** | Shield fee, yield fee, volume tiers, integrator terms | Extended |
+| **Treasury operations** | Allocations, grants, partnerships ≤5% | Standard |
+| **Treasury operations** | Allocations >5% | Extended |
+| **Parameters** | Batch windows, relayer config, yield sources | Standard |
+| **Parameters** | Wind-down threshold, wind-down deadline | Standard |
+| **Parameters** | Governance parameters (quorum, quorum floor, voting period, execution delay, bond, threshold) | Extended |
+| **Parameters** | Treasury outflow rate limits (floors and percentages) | Extended |
+| **Steward** | Treasury Steward election / removal | Extended |
+| **Steward** | Steward budget table (add/remove tokens, change limits/windows) | Extended |
+| **Security Council** | SC address replacement via governance | Extended |
+| **Adapters** | Authorize new adapters, deauthorize old adapters | Standard |
+| **Upgrades** | Governor contract upgrade (UUPS, governance-gated) | Extended |
+| **Upgrades** | Fee module upgrade (UUPS, governance-gated) | Extended |
+| **Upgrades** | Revenue counter upgrade (UUPS, governance-gated) | Extended |
+| **Revenue** | Non-stablecoin revenue attestation (`attestRevenue`) | Standard |
+| **Revenue** | Expand qualifying revenue definition | Standard |
+| **ARM token** | Add address to transfer whitelist (add-only, no removal) | Extended |
+
+### Immutable
+
+| Category | Items |
+|----------|-------|
+| **Cryptography** | ZK circuits, BN254 verifier |
+| **Note structure** | Commitment format, nullifier derivation |
+| **Privacy guarantees** | Shielded set membership, unlinkability |
+| **Shielded pool** | Core pool contracts (inherited from Railgun) |
+| **Crowdfund contract** | All parameters (see PARAMETER_MANIFEST.md §12) |
+| **ARM token contract** | Non-upgradeable. No proxy. All invariants in ARM_TOKEN.md §12 are unconditional. |
+| **Revenue-lock contract** | Milestone schedule and release logic. Beneficiaries must trust these cannot change. |
+| **Wind-down contract** | Trigger mechanism (conditions are deterministic), treasury sweep authority, `setTransferable(true)` authority, and `windDownActive` flag on pause contract. Parameters (threshold, deadline) are governable but the trigger logic itself is immutable. |
+
+---
+
+## Treasury Steward
+
+### Role
+
+Elected role responsible for day-to-day treasury operations: recurring expenses, grants, and service payments in USDC.
+
+### Authority
+
+The steward operates within a **per-token budget table** — a governance-managed mapping of `token address → (budget limit, rolling window)`. Only tokens in the table can be distributed via steward proposals.
+
+**Launch configuration:**
+
+| Token | Budget limit | Rolling window |
+|---|---|---|
+| USDC | $60,000 | 30 days |
+
+**Governance can modify the table via extended proposal:**
+- Add a new token with its own budget and window (e.g., "authorize steward to distribute up to 10,000 ARM per 30-day window")
+- Change an existing token's budget or window
+- Remove a token from the table (revokes steward authority for that asset)
+
+**Can:**
+- Distribute tokens listed in the budget table, within their per-token rolling limits, via Treasury Steward proposals (pass-by-default, 7-day governance review window)
+- Execute pre-approved recurring expenses within budget
+- Fast-track coordination with Security Council on security-critical actions
+
+**Cannot:**
+- Distribute tokens not in the budget table — these require full governance proposals regardless of amount
+- Exceed any per-token rolling limit
+- Change fee rates or protocol parameters
+- Grant custom integrator terms (requires governance)
+- Exceed the treasury outflow rate limits (see §Treasury Outflow Limits) — steward spending counts against the aggregate rolling window in addition to the per-token steward budget
+
+⚠️ At launch, only USDC is in the steward budget table. The $60,000/month limit is sized for approximately 20 months of operating runway on a base raise.
+
+### Process
+
+Treasury Steward proposals **pass by default** unless governance votes them down within a 7-day review window.
+
+**Defeat condition:** Standard quorum (20% of circulating voting power or 100,000 ARM, whichever is greater) is reached AND a simple majority votes AGAINST. If quorum is not met, the proposal passes by default — the community isn't concerned enough to mobilize.
+
+This inverts the normal proposal flow for routine operational spending: the steward acts unless the community objects, rather than requiring active support for every payment.
+
+### Budget mechanics
+
+- **Per-token rolling windows.** Each token in the budget table has its own rolling window (30 days at launch for USDC). Limits are measured over any trailing window period.
+- **No carryover.** Unused budget does not accumulate. Each token's limit is always its configured amount per trailing window.
+- **Multiple proposals may stack** within the same window, but their combined value per token cannot exceed that token's budget limit.
+- **Steward spending counts against treasury outflow limits.** The per-token steward budget and the aggregate treasury outflow limits (§Treasury Outflow Limits) are not independent — steward proposals consume from the same rolling outflow window as governance proposals. A steward proposal can be within the steward's per-token budget but still revert at execution if it would breach the aggregate treasury outflow limit.
+
+### Election
+
+- Initial Treasury Steward: Core team (Knowable)
+- Term: 6 months, renewable
+- Election and re-election: Extended governance proposal
+- Removal: Extended governance proposal, immediate effect
+
+### Steward compensation
+
+**No built-in compensation mechanism.** The steward role is operational authority, not a paid position. If a steward wants compensation, they submit a standard governance proposal (requires quorum + majority FOR) through a non-steward address — the same path as any community member requesting funds. Steward proposals (pass-by-default channel) cannot include payments to the steward's registered address (the address that holds the steward role on-chain). The treasury outflow limits and defeat mechanism are the real safeguards against steward self-dealing, not address filtering.
+
+The initial steward (Knowable) is compensated via the team ARM allocation. No additional payment for the steward role at launch.
+
+### Adding operational roles
+
+Additional steward-like roles (e.g. a Protocol Steward for integrator and relayer operations) can be added via governance proposal deploying a new contract with bounded authority. No governance contract upgrade is required — new roles are additive grants of specific permissions. This path is open when genuine separation of people makes it operationally necessary.
+
+---
+
+## Security Council
+
+3-of-5 multisig. Fast-response body for situations where the governance proposal cycle (7+ days) is too slow.
+
+### Powers
+
+| Power | Mechanism | Constraint |
+|---|---|---|
+| **Pause new shields** | On-chain pause flag on the shielded pool | Auto-expires after 24 hours. SC can re-invoke but each invocation is a visible on-chain event. Unshields are never pauseable — users can always exit. |
+| **Veto queued proposal** | Cancel a passed proposal during its execution delay, before it executes | See §Veto Mechanism below. |
+| **Crowdfund cancel** | Emergency cancel of the crowdfund pre-finalization | Pre-protocol-launch only. See CROWDFUND.md §cancel(). No ratification required. |
+
+### Not in scope
+
+The Security Council cannot:
+- Execute arbitrary transactions
+- Upgrade any contract
+- Move treasury funds
+- Change fee or governance parameters
+- Pause unshields (users can always exit)
+- Pause the governor itself
+- Make permanent parameter changes of any kind
+
+### Veto mechanism
+
+When the Security Council vetoes a queued proposal:
+
+1. **Proposal passes** with quorum during normal voting.
+2. **SC vetoes** during the execution delay window. The proposal is cancelled. SC must publish a written rationale (off-chain, with on-chain hash for verifiability).
+3. **A 7-day veto ratification vote begins automatically.** The question: "Uphold the Security Council's veto?"
+   - **FOR (uphold veto):** The vetoed proposal is permanently cancelled. The SC acted correctly in the community's view.
+   - **AGAINST (deny veto):** The vetoed proposal can be re-submitted. **The current Security Council multisig is ejected** — its address is removed from the governor contract. Governance must elect a new SC via extended proposal. During the gap, no SC powers are available (no pause, no veto).
+   - **Quorum not met:** Veto stands by default. If the community can't mobilize to override, the SC's security judgment holds.
+4. Ratification uses **standard quorum** (20% of circulating voting power or 100,000 ARM).
+
+**The ejection consequence is the accountability mechanism.** The SC only vetoes when they're genuinely confident the community will back them — vetoing a proposal the community wanted means losing the seat. This replaces the need for a separate SC bond or punishment mechanism.
+
+**No double veto.** If a vetoed-and-denied proposal is re-submitted and passes again, the newly elected SC cannot veto it. The community has spoken twice. **On-chain enforcement:** the governor stores the calldata hash of each vetoed-and-denied proposal. If a new proposal has an identical calldata hash, the SC's `veto()` call reverts. Slight modifications to the proposal (different parameters, different recipient) produce a different hash and are vetoable — the community spoke on the specific proposal, not on variations.
+
+### Composition
+
+Core team (2), external security (2), community (1).
+
+### Membership changes
+
+**Routine rotation:** The SC manages its own signer composition via standard Gnosis Safe signer replacement. This keeps routine rotation off the governance proposal queue.
+
+**Governance override:** Governance can replace the SC multisig address via extended proposal (`setSecurityCouncil(newAddress)` on the governor contract). This is the path used after an ejection or if the community loses confidence in the SC.
+
+**Ejection (via denied veto):** The governor contract automatically removes the SC address when a veto ratification vote fails (majority AGAINST). The `setSecurityCouncil` slot is set to `address(0)` until governance elects a replacement.
+
+### Limitations
+
+- All SC actions except crowdfund cancel require retroactive ratification or produce automatic ratification votes (veto path)
+- Shield pauses auto-expire after 24h — if not renewed, the pause lifts automatically
+- The SC has no spending authority, no parameter authority, and no upgrade authority
+
+⚠️ Security Council membership must be confirmed and multisig deployed before the crowdfund opens.
+
+---
+
+## Token Distribution
+
+**See `ARM_TOKEN.md` for canonical token behavior, allocation enforcement, transfer restrictions, and revenue-gated unlock mechanics.**
+
+Summary (non-authoritative — `ARM_TOKEN.md` takes precedence):
+
+| Allocation | % | Enforcement | Voting power |
+|---|---|---|---|
+| Crowdfund | 10–15% | Non-transferable until governance unlock | Active once claimed and delegated |
+| Team | 15% | Shared revenue-lock contract (per-beneficiary allocations; Knowable Safe is a beneficiary like any other team member) | Proportional to revenue-unlock % |
+| Airdrop | 5% | Shared revenue-lock contract (same contract as team) | Proportional to revenue-unlock % |
+| Treasury | 65–70% | Governance-controlled; whitelisted for transfers | None — `delegate()` reverts for treasury address |
+
+### Revenue-Gated Unlocks
+
+Team and airdrop tokens unlock based on cumulative protocol fee revenue.
+
+| Cumulative Revenue | % Unlocked |
+|----|---|
+| $10k | 10% |
+| $50k | 25% |
+| $100k | 40% |
+| $250k | 60% |
+| $500k | 80% |
+| $1M | 100% |
+
+**No time-based fallback.** If revenue never reaches $1M, tokens never fully unlock.
+
+**What counts as revenue:**
+- Shield fees (USDC and stablecoins) recognized through the fee-collector / RevenueCounter path (permissionless sync — see §Revenue Counter Mechanism)
+- Yield fees (USDC and stablecoins) recognized through the same fee-collector / RevenueCounter path
+- Non-stablecoin fees (ETH, etc.) require a governance proposal to attest the USD value at time of receipt and credit it to the RevenueCounter — avoids oracle dependencies while keeping the counter honest
+
+Governance can expand the definition of qualifying revenue via standard proposal.
+
+### Revenue Counter Mechanism
+
+A dedicated `RevenueCounter` contract holds a single monotonic `uint256 recognizedRevenueUsd` — the canonical cumulative revenue figure that the revenue-lock contract reads.
+
+**Interface:**
+```
+function recognizedRevenueUsd() external view returns (uint256)
+```
+
+**How it gets updated:**
+
+| Revenue type | Update path | Authority |
+|---|---|---|
+| Stablecoin fees (USDC) | Permissionless `syncStablecoinRevenue()` — reads a monotonic cumulative-receipts counter on the **fee-collector contract** (the contract that receives shield fees and yield fees). This is NOT a treasury balance read — treasury outflows would corrupt the count. The fee-collector exposes `cumulativeFeesCollected() returns uint256` and only increments when fees are received. `syncStablecoinRevenue()` reads this value and updates the revenue counter accordingly. | Anyone can call |
+| Non-stablecoin fees (ETH, etc.) | Governance proposal attests a new cumulative total via `attestRevenue(uint256 newCumulativeUsd)` | Governance (standard proposal) |
+
+**Properties:**
+- **Monotonic by contract.** `attestRevenue(newValue)` requires `newValue >= recognizedRevenueUsd`. The counter can never decrease. A governance mistake that attests the same value twice is harmless (no-op).
+- **Cumulative, not delta.** Governance attests a new total, not an increment. This is idempotent — attesting "$50,000" twice doesn't double-count.
+- **The revenue-lock contract reads this counter.** The lock has an immutable reference to the `RevenueCounter` address, set at deployment. It calls `recognizedRevenueUsd()` when a beneficiary requests release, compares against the milestone table, and releases the entitled percentage.
+- **The counter is governance-upgradeable** (UUPS, governor as upgrade authority). The lock reads a fixed proxy address whose implementation can be upgraded by governance to handle new fee types — but the interface (`recognizedRevenueUsd() returns uint256`) never changes. The lock doesn't know or care about upgrades behind the proxy.
+
+**Events:**
+```
+RevenueUpdated(uint256 cumulativeRevenue, uint256 previousRevenue)
+```
+Emitted on every update — both `syncStablecoinRevenue()` and `attestRevenue()`. Monitoring reads this event from the RevenueCounter contract address, not from the ARM token.
+
+**Revenue counter appears in the Contract Upgrade Scope table as a governance-upgradeable module.**
+
+---
+
+## Fee Structure
+
+**See `FEE_STRUCTURE.md` for canonical fee specification** — shield fees, yield fees, volume tiers, integrator terms, custom terms, on-chain queries, and events.
+
+Summary (non-authoritative — `FEE_STRUCTURE.md` takes precedence):
+- Shield (deposit): Armada take (40–50 bps, volume-tiered) + integrator fee (self-set + bonus)
+- Yield redemption: 15% of yield to treasury
+- All other operations (shielded transfer, swap, lend, unshield): free
+- All fee changes require extended governance proposal — steward has no discretion over fee rates
+
+---
+
+## Relayer Economics
+
+**See `FEE_STRUCTURE.md` for relayer fee details.**
+
+Summary: Relayers set their own fees (gas cost + markup). No protocol cut. Users can self-relay to avoid relayer fees.
+
+---
+
+## Treasury Distributions
+
+### Pre-wind-down (operational)
+
+Treasury movements are executed via governance proposal. The treasury multisig executes the on-chain actions approved by governance.
+
+- **Steward channel:** USDC payments up to $60k/rolling-30-days via pass-by-default proposals. See §Treasury Steward.
+- **Standard governance proposals:** Any treasury distribution (ARM, USDC, ETH, other assets) can be proposed through normal governance. Subject to treasury outflow limits (§Treasury Outflow Limits).
+
+### ARM buyback (future module)
+
+Protocol fee revenue (USDC) can be used to buy ARM from the open market, accruing value to ARM holders. This is a treasury operations module — a new contract authorized by governance to spend treasury USDC on market ARM purchases. Not required at launch; can be added later without architectural changes to the ARM token or governor. Design questions (% of revenue, frequency, execution mechanism, front-running protection) will be specified when the module is built.
+
+### Wind-down (redemption)
+
+See §Wind-Down for the redemption mechanism. ARM holders deposit ARM into the redemption contract and receive pro-rata shares of non-ARM treasury assets. Permissionless, no governance required.
+
+**Treasury steward details:** See §Treasury Steward above for budget mechanics, defeat quorum, and process. Steward spending counts against treasury outflow limits (see §Treasury Outflow Limits).
+
+---
+
+## Wind-Down
+
+### Trigger
+
+**Two trigger paths:**
+
+1. **Automatic (permissionless):** Anyone can call `triggerWindDown()`. The contract checks: `block.timestamp > windDownDeadline && cumulativeRevenue < revenueThreshold`. If both conditions are true, wind-down activates. If either is false, the call reverts. No privileged caller needed — the conditions are deterministic.
+
+2. **Governance vote:** Governance can trigger wind-down at any time via standard proposal, regardless of revenue or deadline.
+
+| Parameter | Default | Governable |
+|-----------|---------|------------|
+| Revenue threshold | $10,000 cumulative | Yes (standard proposal) |
+| Deadline | December 31, 2026 | Yes (standard proposal) |
+
+### Sequence
+
+1. Wind-down triggers (automatic or governance vote)
+2. **ARM transfers are automatically enabled** — `setTransferable(true)` is called as part of the wind-down transaction. Holders must be able to move ARM to redeem their treasury share.
+3. Shielded pool enters withdraw-only mode immediately — `shield()` and shielded `transfer()` disabled; `unshield()` always available **indefinitely with no deadline**. There is no exit window — users can withdraw at any time, forever.
+4. **Governance ends.** The governor stops accepting new proposals. No further governance votes, no steward proposals, no parameter changes. All remaining actions are permissionless (redemption, unshielding).
+5. **Non-ARM treasury assets are swept to the redemption contract** via a permissionless `sweepToken(address token)` function on the wind-down contract. Anyone can call this function for any ERC-20 token address after wind-down triggers — it transfers the treasury's full balance of that token to the redemption contract. **`sweepToken(ARM)` reverts** — ARM cannot be swept. Treasury ARM remains locked permanently. Multiple calls (one per token) are needed to sweep all assets. Native ETH is swept via a separate `sweepETH()`. The wind-down contract has pre-authorized authority over the treasury for this purpose. No manual multisig action required — community members or participants can sweep whatever tokens they know about.
+6. Treasury ARM has no distribution mechanism after wind-down — it remains locked permanently.
+
+### Redemption mechanism
+
+A **redemption contract** holds the treasury's non-ARM assets after wind-down. ARM holders deposit ARM into the contract and receive their pro-rata share of treasury assets in return.
+
+**How it works:**
+- Holder sends ARM to the redemption contract
+- The contract calculates: `holderShare = depositedArm / circulatingSupply × remainingTreasuryAssets`
+- The contract sends the holder their share of each treasury asset (USDC, ETH, etc.)
+- The deposited ARM is locked in the redemption contract permanently (not burned — the ARM token has no burn function)
+
+**Circulating supply** for the denominator is computed as: `ARM.totalSupply() - ARM.balanceOf(treasury) - ARM.balanceOf(revenueLock) - ARM.balanceOf(crowdfundContract) - ARM.balanceOf(redemptionContract)`. These four addresses are **hardcoded** in the redemption contract — no registry, no governance-managed list. The revenue-gated lock mechanism is a one-time launch construct (see REVENUE_LOCK.md §11), so no future lock contracts need to be accounted for. Custom grants post-transfer-unlock are standard treasury transfers, not lock contracts.
+
+If wind-down triggers before all crowdfund participants have claimed, the unclaimed ARM in the crowdfund contract is excluded from the denominator (participants can still call `claim()` after wind-down and then redeem). As holders redeem, the redemption contract's ARM balance grows and the denominator shrinks, ensuring correct pro-rata math for sequential redemptions.
+
+**Properties:**
+- **Permissionless.** No governance vote needed. No snapshot. No merkle tree. No claim window. Deposit ARM, receive your share, whenever you want.
+- **Self-service.** Each holder decides when to redeem. No coordination required.
+- **Sequential correctness.** Each redemption is calculated against the remaining assets and remaining circulating supply. Early and late redeemers get the same pro-rata outcome, with one caveat: if revenue-lock beneficiaries call `release()` after wind-down (because milestones were previously reached), the lock contract's ARM balance decreases, shrinking the denominator slightly. This means redemption ratios can shift marginally between redemptions if releases happen in between. The effect is bounded by the amount of unreleased ARM at wind-down time and is negligible in practice.
+- **No burn required.** ARM deposited into the redemption contract is locked permanently. The denominator calculation excludes it, so the math stays correct.
+
+### Who receives treasury distribution
+
+Pro-rata to all **circulating** ARM holders on **non-ARM treasury assets only**.
+
+**Circulating (can redeem):**
+- Crowdfund tokens (claimed)
+- Released team/airdrop tokens (released from revenue-lock contract)
+- Any ARM previously distributed from treasury
+
+**Cannot redeem:**
+- Revenue-locked team/airdrop tokens not yet released (still in the lock contract — the lock contract cannot call the redemption contract)
+- Treasury ARM (locked permanently)
+
+Those who paid for tokens have priority in failure scenarios. Locked tokens only unlock if protocol earns revenue — if the protocol failed before earning revenue, those tokens stay locked and cannot participate in redemption.
+
+### Post-wind-down
+
+**Governance is permanently disabled.** No new proposals. The governor contract stops accepting submissions. The steward role is void. The Security Council retains a single non-renewable 24h pause authority only — it can invoke one pause on the shielded pool (in case an adapter issue affects user withdrawals), but the pause auto-expires after 24h and cannot be renewed post-wind-down. **Enforcement:** as part of `triggerWindDown()`, the wind-down contract sets a `windDownActive` flag on the pause contract. The pause mechanism checks: if `windDownActive && pauseAlreadyInvoked`, revert. This prevents the SC from indefinitely pausing the pool without accountability, since the normal ratification mechanism depends on governance being active.
+
+All remaining actions are permissionless:
+- ARM holders redeem via the redemption contract (no deadline)
+- Shielded pool users unshield indefinitely
+- Revenue-lock beneficiaries can still call `release()` if milestones were previously reached
+
+---
+
+## Treasury Outflow Limits
+
+Aggregate rolling-window limits on treasury outflows. These are the primary defense against governance capture — even a successfully passed malicious proposal can only extract limited value per window.
+
+### USDC outflow
+
+| Parameter | Value | Governable |
+|---|---|---|
+| Rolling window | 30 days | Yes (extended proposal) |
+| Limit | $100,000 or 10% of USDC in treasury, **whichever is greater** | Yes (extended proposal) |
+| Minimum floor | $50,000 (governance cannot reduce below this) | No — immutable |
+
+### ARM outflow
+
+| Parameter | Value | Governable |
+|---|---|---|
+| Rolling window | 30 days | Yes (extended proposal) |
+| Limit | 250,000 ARM or 3% of ARM in treasury, **whichever is greater** | Yes (extended proposal) |
+| Minimum floor | 100,000 ARM (governance cannot reduce below this) | No — immutable |
+
+### How limits work
+
+- **Aggregate, not per-proposal.** All treasury outflows within a rolling 30-day window count against the same limit — governance proposals, steward proposals, and any authorized module (e.g., future buyback contract).
+- **Per-asset tracking.** USDC and ARM limits are tracked independently. A large USDC outflow does not consume ARM budget or vice versa.
+- **Proposals that would exceed the limit revert at execution.** The proposal passes governance normally, but the on-chain execution fails if the rolling-window limit would be breached. The proposal can be re-executed once the window has rolled enough to accommodate it.
+- **The percentage scales with treasury size.** On a $1M treasury, the USDC limit is $100k (floor binding). On a $5M treasury, the limit is $500k (10% binding). This allows the protocol to grow without constant parameter adjustments.
+- **The minimum floors are immutable.** Governance can raise the percentage or the floor, but cannot reduce below $50k USDC or 100k ARM. This prevents a captured governance from zeroing the limits.
+
+---
+
+## Contract Upgrade Scope
+
+| Contract | Upgradeable? | Mechanism | Why |
+|---|---|---|---|
+| **ARM token** | No | — | Trust bedrock. All invariants are unconditional. See ARM_TOKEN.md §9. |
+| **Revenue-lock contract** | No | — | Beneficiaries must trust the milestone schedule and release logic cannot change. |
+| **Wind-down contract** | No | — | Trigger conditions must be deterministic and immutable. Has pre-authorized authority to: sweep non-ARM treasury assets to redemption contract (permissionless per-token), call `setTransferable(true)`, and set `windDownActive` flag on pause contract. Parameters (threshold, deadline) are governable, but the trigger mechanism itself cannot be replaced. |
+| **Governor** | Yes | UUPS, governance-gated via timelock | Must be extensible — new proposal types, bond mechanics, steward logic. Extended proposal required. |
+| **Fee module** | Yes | UUPS, governance-gated via timelock | Fee tiers, integrator terms, yield fee rates. New fee types as protocol evolves. Extended proposal required. |
+| **Revenue counter** | Yes | UUPS, governance-gated via timelock | Interface is fixed (`recognizedRevenueUsd() returns uint256`). Implementation can be upgraded to handle new revenue types. The immutable revenue-lock contract reads the proxy address. **Note:** if the fee module is replaced (new proxy address), the RevenueCounter implementation must be upgraded to point at the new fee-collector — these upgrades must be coordinated. |
+| **Adapters** (CCTP, Aave, future) | Not upgradeable — additive registry | Governor maintains authorized adapter registry | New adapters are deployed as independent contracts and authorized via governance proposal. Old adapters can be deauthorized or set to withdraw-only. Each adapter is independently auditable. See §Adapter Registry. |
+| **Shielded pool** (Railgun) | No | — | Core privacy infrastructure. Immutable. |
+
+### Adapter Registry
+
+The governor maintains a registry of authorized adapter addresses. Adapters interact with the shielded pool and external protocols (Aave, CCTP, future yield sources, future relayer infrastructure).
+
+**Adding a new adapter:** Deploy the adapter contract independently. Submit a standard governance proposal to authorize it (`authorizeAdapter(address)`). Once authorized, the adapter can interact with the protocol. Existing adapters remain active — new additions are additive, not replacements.
+
+**Removing an adapter:** Governance proposal to deauthorize (`deauthorizeAdapter(address)`). For adapters with user positions (e.g., yield adapter with deposits), deauthorization should set the adapter to **withdraw-only mode** rather than immediate full deauthorization — users need time to exit their positions.
+
+**Replacing an adapter:** Deploy the new version, authorize it, then deauthorize the old one (in withdraw-only mode). Both run in parallel during the transition.
+
+This is the model for handling EIP-8141 (new precompiles for proof verification): deploy a new relayer/proving adapter that uses the new precompiles, authorize it via governance, old adapter stays active for in-flight operations.
