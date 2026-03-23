@@ -13,7 +13,7 @@
 | Security Council (powers, veto, ratification, ejection) | Ready |
 | Treasury Steward (role, budget, defeat quorum, compensation) | Ready |
 | Wind-Down (trigger, sequence, redemption, post-wind-down) | Ready |
-| Treasury Distributions (operational, buyback, wind-down redemption) | Ready (buyback module deferred — not required at launch) |
+| Treasury Distributions (operational, surplus deployment, wind-down redemption) | Ready |
 | Fee Structure | See FEE_STRUCTURE.md |
 | Token Distribution | See ARM_TOKEN.md |
 
@@ -38,7 +38,7 @@ ARM tokens vote directly — no locking required. Voting power equals your token
 This means:
 - You can vote and then sell. Your voting power was already fixed.
 - You cannot buy ARM after a proposal is created and use it on that vote.
-- Flash loan attacks are structurally impossible — borrowed tokens have no checkpoint history.
+- Atomic flash loan attacks are structurally impossible — borrowed tokens have no checkpoint history at the snapshot block. Short-term capital attacks (borrow → hold through snapshot → vote → return) require real capital exposure for 9+ days minimum (proposal delay + voting period). The defense model is detection and reaction, not prevention: outflow limits bound damage per window, visibility windows give the community time to mobilize, and the Security Council can veto during execution delay. As ARM liquidity deepens, time-weighted average balance (TWAB) voting may be introduced via governor upgrade to further raise the cost of short-term accumulation attacks.
 - When tokens transfer, the sender's delegated voting power decreases and the recipient starts undelegated. Secondary market activity naturally refreshes delegation state.
 
 ### Delegation
@@ -65,9 +65,11 @@ Delegation is free to change at any time. Redelegating takes effect for proposal
 
 **If you plan to receive delegation from others:** call `delegate(yourAddress)` before those delegators claim. This establishes your checkpoint history.
 
-### Known limitation: stale delegations
+### Known limitation: early delegation centralization
 
-Delegation persists until actively revoked. Original holders who set delegation at claim time and go dark give their delegates permanent voting weight with no expiry mechanism. This is a known property of Compound-style governance and is not currently solved by Armada. Mitigation relies on competitive redelegation dynamics — if a delegate behaves badly, active holders redelegate away — and on the crowdfund cohort being small and warm at launch. A delegation expiry mechanism may be introduced via governance as the protocol matures.
+Delegation-at-circulation means every participant must choose a delegatee at claim time. In practice, most will delegate to whoever is visible and active in the early community. **3-5 early delegates holding majority voting power within weeks of launch is a likely near-term outcome, not a theoretical long-term risk.** This is a property of every Compound-style delegation system — early movers accumulate power because passive holders never redelegate.
+
+Delegation persists until actively revoked. Original holders who set delegation at claim time and go dark give their delegates permanent voting weight with no expiry mechanism. Mitigation at launch relies on competitive redelegation dynamics — if a delegate behaves badly, active holders redelegate away — and on the crowdfund cohort being small and warm. A delegation expiry mechanism (e.g., delegations lapse after 6-12 months unless renewed) may be introduced via governor upgrade as the protocol matures.
 
 ### Quorum denominator
 
@@ -89,7 +91,7 @@ Both the numerator (votes cast) and the denominator (circulating voting power) a
 
 ### Attack surface
 
-**Accumulate-before-snapshot, vote, sell:** An attacker buys ARM before the snapshot block, votes, then dumps. Cost is real capital exposed during at minimum the 48-hour proposal delay plus the voting period — 9+ days at standard, 16+ days at extended. The treasury outflow rate limits (see §Treasury Outflow Limits) are the primary defense against the capture loop — even a successfully passed malicious proposal can only extract limited value per window.
+**Accumulate-before-snapshot, vote, sell:** An attacker buys ARM before the snapshot block, votes, then dumps. Cost is real capital exposed during at minimum the 48-hour proposal delay plus the voting period — 9+ days at standard, 16+ days at extended. A persistent attacker can extract across multiple windows, not just one. The defense model is **detection and reaction, not prevention**: treasury outflow rate limits (see §Treasury Outflow Limits) bound damage per window, the proposal delay and execution delay provide visibility windows for the community to detect hostile proposals, and the Security Council can veto during execution delay. The protocol should maintain off-chain monitoring for hostile accumulation patterns (large purchases followed by delegation changes).
 
 **Quorum suppression:** A large holder never delegates, keeping their tokens out of the denominator. This shrinks the absolute quorum threshold, making it easier for a small coalition to pass proposals. Mitigation: claim-time delegation requirement prevents tokens from sitting completely inert.
 
@@ -138,6 +140,10 @@ A proposal is automatically **extended** if it touches any of the following:
 - Governance parameter changes (quorum, quorum floor, voting period, execution delay, bond, threshold)
 - Treasury Steward election or removal
 - Security Council seat changes via governance
+- Contract upgrades (governor, fee module, revenue counter)
+- ARM token whitelist additions
+- Expanding the qualifying revenue definition
+- Treasury outflow rate limit changes
 
 All other proposals are **standard**.
 
@@ -177,6 +183,8 @@ All parameters are themselves governable via extended proposal.
 | **Treasury operations** | Allocations, grants, partnerships ≤5% | Standard |
 | **Treasury operations** | Allocations >5% | Extended |
 | **Parameters** | Batch windows, relayer config, yield sources | Standard |
+| **Parameters** | Activity shaping defaults (transaction size constraints, rate limits, recommended ranges) | Extended |
+| **Parameters** | Ingress normalization (standard ingress amounts, phase, custom deposit availability) | Extended |
 | **Parameters** | Wind-down threshold, wind-down deadline | Standard |
 | **Parameters** | Governance parameters (quorum, quorum floor, voting period, execution delay, bond, threshold) | Extended |
 | **Parameters** | Treasury outflow rate limits (floors and percentages) | Extended |
@@ -188,7 +196,7 @@ All parameters are themselves governable via extended proposal.
 | **Upgrades** | Fee module upgrade (UUPS, governance-gated) | Extended |
 | **Upgrades** | Revenue counter upgrade (UUPS, governance-gated) | Extended |
 | **Revenue** | Non-stablecoin revenue attestation (`attestRevenue`) | Standard |
-| **Revenue** | Expand qualifying revenue definition | Standard |
+| **Revenue** | Expand qualifying revenue definition | Extended |
 | **ARM token** | Add address to transfer whitelist (add-only, no removal) | Extended |
 
 ### Immutable
@@ -255,6 +263,12 @@ This inverts the normal proposal flow for routine operational spending: the stew
 - **No carryover.** Unused budget does not accumulate. Each token's limit is always its configured amount per trailing window.
 - **Multiple proposals may stack** within the same window, but their combined value per token cannot exceed that token's budget limit.
 - **Steward spending counts against treasury outflow limits.** The per-token steward budget and the aggregate treasury outflow limits (§Treasury Outflow Limits) are not independent — steward proposals consume from the same rolling outflow window as governance proposals. A steward proposal can be within the steward's per-token budget but still revert at execution if it would breach the aggregate treasury outflow limit.
+
+### Circuit breaker
+
+**If 5 consecutive steward proposals have participation below 30%** (regardless of whether quorum was technically reached), the steward channel automatically pauses. No further steward proposals can be submitted until a standard governance proposal explicitly re-authorizes the steward channel (requires quorum + majority FOR). This prevents both governance apathy (nobody votes) and minimal-participation capture (an attacker votes just enough to clear quorum without genuine community engagement).
+
+**Participation** = `(FOR + AGAINST + ABSTAIN votes cast) / circulating voting power at the proposal's snapshot block`. Abstain counts as participation. Changed votes count by final state only (each address's last vote before close). This uses the same denominator as quorum — circulating voting power snapshotted at proposal creation.
 
 ### Election
 
@@ -324,7 +338,7 @@ Core team (2), external security (2), community (1).
 
 **Governance override:** Governance can replace the SC multisig address via extended proposal (`setSecurityCouncil(newAddress)` on the governor contract). This is the path used after an ejection or if the community loses confidence in the SC.
 
-**Ejection (via denied veto):** The governor contract automatically removes the SC address when a veto ratification vote fails (majority AGAINST). The `setSecurityCouncil` slot is set to `address(0)` until governance elects a replacement.
+**Ejection (via denied veto):** The governor contract automatically removes the SC address when a veto ratification vote fails (majority AGAINST). The `setSecurityCouncil` slot is set to `address(0)`. During the gap, no SC powers are available (no pause, no veto). Anyone can submit an extended proposal nominating a new SC multisig address — the normal extended proposal path applies (48-hour delay, 14-day vote, 7-day execution delay). Governance should treat SC replacement as the highest priority during this window.
 
 ### Limitations
 
@@ -369,7 +383,7 @@ Team and airdrop tokens unlock based on cumulative protocol fee revenue.
 - Yield fees (USDC and stablecoins) recognized through the same fee-collector / RevenueCounter path
 - Non-stablecoin fees (ETH, etc.) require a governance proposal to attest the USD value at time of receipt and credit it to the RevenueCounter — avoids oracle dependencies while keeping the counter honest
 
-Governance can expand the definition of qualifying revenue via standard proposal.
+Governance can expand the definition of qualifying revenue via extended proposal (see §Revenue Counter Mechanism).
 
 ### Revenue Counter Mechanism
 
@@ -390,6 +404,8 @@ function recognizedRevenueUsd() external view returns (uint256)
 **Properties:**
 - **Monotonic by contract.** `attestRevenue(newValue)` requires `newValue >= recognizedRevenueUsd`. The counter can never decrease. A governance mistake that attests the same value twice is harmless (no-op).
 - **Cumulative, not delta.** Governance attests a new total, not an increment. This is idempotent — attesting "$50,000" twice doesn't double-count.
+- **Attestations must reference verifiable on-chain receipts.** Non-stablecoin revenue attestation proposals should include the transaction hashes of the fee receipts being credited and use the observable market price at transaction time (e.g., ETH/USD price at the block the fee was received). The attested value must be auditable and grounded in market data — not a subjective interpretation.
+- **Expanding the qualifying revenue definition requires an extended proposal** (14-day vote, 30% quorum, 7-day execution delay). This is treated as quasi-monetary policy because revenue unlocks control team token supply timing.
 - **The revenue-lock contract reads this counter.** The lock has an immutable reference to the `RevenueCounter` address, set at deployment. It calls `recognizedRevenueUsd()` when a beneficiary requests release, compares against the milestone table, and releases the entitled percentage.
 - **The counter is governance-upgradeable** (UUPS, governor as upgrade authority). The lock reads a fixed proxy address whose implementation can be upgraded by governance to handle new fee types — but the interface (`recognizedRevenueUsd() returns uint256`) never changes. The lock doesn't know or care about upgrades behind the proxy.
 
@@ -432,15 +448,41 @@ Treasury movements are executed via governance proposal. The treasury multisig e
 - **Steward channel:** USDC payments up to $60k/rolling-30-days via pass-by-default proposals. See §Treasury Steward.
 - **Standard governance proposals:** Any treasury distribution (ARM, USDC, ETH, other assets) can be proposed through normal governance. Subject to treasury outflow limits (§Treasury Outflow Limits).
 
-### ARM buyback (future module)
+### Surplus deployment (future)
 
-Protocol fee revenue (USDC) can be used to buy ARM from the open market, accruing value to ARM holders. This is a treasury operations module — a new contract authorized by governance to spend treasury USDC on market ARM purchases. Not required at launch; can be added later without architectural changes to the ARM token or governor. Design questions (% of revenue, frequency, execution mechanism, front-running protection) will be specified when the module is built.
+When protocol revenue consistently exceeds operational needs, governance may deploy surplus capital. **No mechanism is predetermined.** The appropriate approach depends on protocol maturity, revenue scale, ARM liquidity depth, and holder behavior at the time.
+
+**Defining "operational needs":** Operational needs include committed expenses (team compensation, infrastructure, audits, integrator incentives) and a target runway buffer. Revenue exceeds operational needs when projected runway remains above the target buffer after the proposed allocation. Governance should establish and maintain a target runway (e.g., 12-24 months of committed expenses) as the threshold below which surplus deployment is inappropriate.
+
+**The wind-down redemption reference value.** ARM has a governance-backed redemption reference value: `non-ARM treasury assets / circulating ARM`. If ARM trades materially below this value, holders have a credible path to realize it through wind-down — subject to governance coordination and execution delay. This is not a hard arbitrage floor (wind-down requires delegate alignment, quorum, and time to execute — ARM can trade below redemption value for meaningful periods if governance doesn't mobilize). But it means the treasury's primary job is not supporting ARM price — the wind-down right provides a credible backstop. The surplus deployment question is therefore: how should governance deploy capital above this reference value to maximize long-term protocol value?
+
+**Available options (individually or in combination):**
+
+**Treasury accumulation.** Builds reserves and extends operational runway. Most appropriate in early stages or uncertain conditions. This is the default — surplus stays in the treasury until governance actively decides otherwise. A growing treasury directly increases the wind-down redemption floor, providing tangible backing for ARM.
+
+**ARM buybacks.** Deploys surplus USDC to acquire ARM from the market. Provides market liquidity and may create a demand signal, but is an indirect and lossy value transfer mechanism (USDC → market → price → holder value leaks at every step via spreads, MEV, and seller behavior). Most effective when ARM liquidity is thin and there is no structural sell pressure. Should be market-aware and conditional (e.g., only execute when price is below a moving average) — not fixed-schedule. See MAB (Market-Aware Buyback) architecture as a reference execution engine. **Buybacks should not be used when:** treasury reserves fall below the runway target, liquidity conditions make execution inefficient (high slippage), or there is evidence of sustained sell pressure overwhelming buys (the buyback becomes exit liquidity, not market formation).
+
+**Direct fee distribution.** Distributes surplus (e.g., USDC) pro-rata to ARM holders who have delegated. Most capital-efficient value transfer (~100% of surplus reaches holders). Appropriate only when revenue meaningfully exceeds operational needs and distribution size justifies gas and coordination costs. At low revenue levels, per-holder distributions may be negligible relative to claim costs. **Only delegated ARM participates in distributions — undelegated tokens are excluded.** Self-delegation counts. This aligns value distribution with governance participation: earning from the protocol requires being active in its governance.
+
+**Phase guidance for governance:**
+
+| Phase | Conditions | Recommended approach |
+|---|---|---|
+| Early (post-launch) | Revenue ≤ operational needs | Treasury accumulation. All revenue funds growth and operations via steward budget. |
+| Growth | Revenue exceeds operations but ARM liquidity is thin | Treasury accumulation + optional conditional buybacks for market formation (not price defense). |
+| Mature | Durable revenue surplus, meaningful ARM liquidity | Distribution becomes viable. Buybacks may complement distribution. Governance decides the mix. |
+
+These are guidelines, not constraints. Governance retains full discretion. The phases reflect the principle that value return mechanisms should match protocol maturity — premature buybacks or distributions divert capital from growth during the phase where capital compounds most aggressively.
 
 ### Wind-down (redemption)
 
 See §Wind-Down for the redemption mechanism. ARM holders deposit ARM into the redemption contract and receive pro-rata shares of non-ARM treasury assets. Permissionless, no governance required.
 
 **Treasury steward details:** See §Treasury Steward above for budget mechanics, defeat quorum, and process. Steward spending counts against treasury outflow limits (see §Treasury Outflow Limits).
+
+### Operational norms
+
+Large treasury proposals (especially those approaching outflow limits) should be socialized with the community before formal submission. The governance mechanism provides detection windows (proposal delay, voting period, execution delay), but detection only converts to action if the community is aware. Off-chain coordination (forum posts, delegate discussion) is expected for significant treasury operations.
 
 ---
 
@@ -568,3 +610,24 @@ The governor maintains a registry of authorized adapter addresses. Adapters inte
 **Replacing an adapter:** Deploy the new version, authorize it, then deauthorize the old one (in withdraw-only mode). Both run in parallel during the transition.
 
 This is the model for handling EIP-8141 (new precompiles for proof verification): deploy a new relayer/proving adapter that uses the new precompiles, authorize it via governance, old adapter stays active for in-flight operations.
+
+---
+
+## Known Limitations and Future Evolution
+
+### Governance misalignment at launch
+
+Token governance represents ARM holders. But Armada's value comes primarily from integrators and the volume they bring. Integrators have zero explicit governance power — their influence is indirect (threatening to leave if fee policy is unfavorable). This misalignment is acknowledged and expected to evolve. Potential future mechanisms include integrator-weighted veto on fee changes, integrator advisory council, or dual-quorum requirements for integration-affecting proposals. None of these are specified or required at launch.
+
+### Governance reality
+
+**At launch, governance security depends on the integrity of the top delegates, not on token distribution.** Power concentrates in 3-5 early delegates. Governance is slow (7-14 day cycles). Protection comes from outflow limits and visibility windows, not from voting mechanics. The system is designed to degrade predictably (bounded leakage, slow degradation) rather than catastrophically (full drain, permanent capture). This is intentional — the outflow limits and SC veto are the real safety rails, and governance voting is the steering mechanism within those rails.
+
+### Future governance upgrades (governor is UUPS-upgradeable)
+
+The following mechanisms are candidates for governance upgrades as the protocol matures. None are required at launch:
+
+- **Time-weighted average balance (TWAB) voting.** Voting power = min(balance at snapshot, time-weighted average over X days). Raises the cost of short-term capital attacks. Becomes important as ARM liquidity deepens and lending markets emerge.
+- **Delegation expiry.** Delegations lapse after 6-12 months unless renewed. Prevents permanent power accumulation by early delegates.
+- **Integrator governance participation.** Volume-weighted integrator input on fee and integration policy.
+- **Surplus deployment mechanisms.** Buyback execution engine (MAB), direct fee distribution, or hybrid — governance decides based on conditions. See §Treasury Distributions.
