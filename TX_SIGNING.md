@@ -12,11 +12,11 @@ This approach prioritizes integration ease and minimal UX friction while accepti
 
 The `root_secret` is the authority. Wallet signatures are entropy sources, not identities.
 
-- `signature_bytes â†’ HKDF â†’ root_secret`
+- `signature_bytes -> HKDF -> root_secret`
 - Users persist/export `root_secret`, not "re-sign later"
 - Re-signing is unreliable convenience, not a recovery path (see Session Management)
 
-This sidesteps wallet determinism debates entirely. Different wallets, different versions, hardware vs software â€” none of it matters once the root secret is derived and backed up.
+This sidesteps wallet determinism debates entirely. Different wallets, different versions, hardware vs software -- none of it matters once the root secret is derived and backed up.
 
 ### Axiom 2: One Shielded Identity, Many Rails
 
@@ -37,11 +37,33 @@ This is a hard invariant, not a best practice:
 
 Integrators only ever receive viewing keys. If an integrator requests a spending key, that's a red flag.
 
+## Normative v1 Surface
+
+For implementers: the following is the complete list of what v1 requires. Everything else in this document is context, rationale, future design space, or pending decisions.
+
+**v1 normative:**
+- EIP-712 enrollment with chain-agnostic domain (no `chainId`, canonical `verifyingContract`)
+- HKDF-SHA-256 derivation from signature bytes to root_secret
+- Versioned subkey derivation (`:v1` info strings)
+- Bytes-to-field-element conversion at the spending/viewing key boundary (modulus TBD pending Andrew)
+- Forced backup export before first use
+- Anti-phish checksum (6 bytes, SHA-256-derived)
+- Viewing keys shared; SDK may attach scope/TTL metadata, which is not cryptographic isolation or revocation
+- Spending keys never leave user context (Axiom 3)
+
+**Not v1 — do not implement:**
+- MFKDF (v2 consideration)
+- Per-chain / per-asset subkeys
+- Mnemonic-based interop with existing Railgun wallets
+- Integrator-scoped key derivation (optional, deferred)
+- On-chain viewing key revocation
+- Social recovery / guardian recovery / on-chain key rotation
+
 ## Enrollment Flow
 
 ### User Experience
 
-Externally, enrollment feels like: "Connect wallet â†’ Generate private balance."
+Externally, enrollment feels like: "Connect wallet -> Generate private balance."
 
 One wallet signature, one forced backup, done. The backup is the recovery path — not re-signing. The enrollment signature includes a timestamp (`issuedAt`) that makes it inherently non-reproducible: a second signature produces different bytes, a different root secret, and a different shielded identity. This is by design. Users must understand during enrollment that losing their recovery secret means losing access.
 
@@ -51,16 +73,66 @@ One wallet signature, one forced backup, done. The backup is the recovery path �
 1. User connects wallet (MetaMask, WalletConnect, etc.)
 
 2. SDK presents EIP-712 typed data for signing:
-   - domain.name: "Armada Protocol"
-   - domain.chainId: <current chain> (informational only)
-   - domain.verifyingContract: <Armada registry address>
+   - domain.name: "Armada Protocol"            [GOVERNANCE-FROZEN]
+   - domain.verifyingContract: <canonical enrollment address>  [GOVERNANCE-FROZEN]
    - message.purpose: "Generate privacy keys (NOT a transaction)"
    - message.issuedAt: <timestamp>
-   - message.version: "1"
+   - message.version: "1"                      [GOVERNANCE-FROZEN]
    
-   Note: The enrollment signature does not bind the canonical identity to a 
-   single chain. chainId is included for wallet UX only. Chain specificity 
-   is introduced in subkey derivation, not at the root level.
+   IMPORTANT — chainId is deliberately OMITTED from the EIP-712 domain.
+   
+   EIP-712 allows partial domain separators — not all fields are required.
+   If chainId were included, the domain separator hash would differ per 
+   chain, producing a different signature, a different root_secret, and a 
+   different shielded identity on each chain. That directly breaks Axiom 2 
+   ("one shielded identity, many rails"). Omitting chainId means the signed 
+   domain is determined solely by {name, verifyingContract}, which are 
+   protocol-wide constants. The user can enroll from any chain.
+
+   Some wallets may display a warning when chainId is absent from the 
+   domain. This is acceptable — the alternative (including chainId) would 
+   silently create per-chain identity fragmentation, which is worse. The 
+   SDK should include clear UX copy explaining that this signature is not 
+   chain-specific ("This generates your Armada privacy keys across all 
+   supported chains").
+
+   IMPORTANT — Governance-frozen signing domain: every field in the signed 
+   data that affects the signature output is identity-determining. Changing 
+   ANY of the following after launch permanently forks all existing user 
+   identities with no migration path:
+   
+     - domain.name ("Armada Protocol")
+     - domain.verifyingContract (canonical enrollment address)
+     - message.purpose ("Generate privacy keys (NOT a transaction)")
+     - message.version ("1")
+   
+   These four values are jointly a governance-frozen tuple. The canonical 
+   enrollment address must be decided before mainnet launch. None of these 
+   values may be changed by governance vote, protocol upgrade, rebrand, or 
+   operational decision. A "rebrand" that changes domain.name is 
+   operationally equivalent to deleting every user's shielded identity.
+
+   Note on verifyingContract: EIP-712 defines this field as "the address 
+   of the contract that will verify the signature." Armada deliberately 
+   repurposes it as a governance-frozen protocol identity constant — it 
+   may be an address that has no deployed code and is never called. This 
+   is a conscious departure from EIP-712's intended semantics, chosen 
+   because identity stability requires a permanent, chain-agnostic 
+   constant, and verifyingContract is the standard field that wallets 
+   display for domain binding. Implementers and auditors should understand 
+   this is not a contract address in the operational sense.
+
+   Design decision: message.version vs domain.version. EIP-712 defines a 
+   standard `version` field in the domain separator itself. This spec 
+   instead places version in the message body. Both are signed and 
+   therefore identity-determining. The tradeoff: domain.version is more 
+   conventional and may get better wallet UX treatment (some wallets 
+   display domain fields more prominently); message.version keeps the 
+   domain minimal ({name, verifyingContract} only) which simplifies the 
+   chain-agnostic identity model. This is a conscious choice, not an 
+   oversight. If wallet testing reveals that domain.version improves 
+   phishing resistance or UX clarity, it can be adopted — but only before 
+   mainnet launch, since moving it post-launch would fork identity.
 
    Note: issuedAt MUST use millisecond precision (Unix epoch, milliseconds)
    and the SDK MUST enforce monotonicity (never reuse a previous timestamp).
@@ -68,7 +140,25 @@ One wallet signature, one forced backup, done. The backup is the recovery path �
    deterministic signing (RFC 6979), where identical payloads produce 
    identical signatures.
 
-3. User signs â†’ signature_bytes (65 bytes)
+3. User signs -> signature_bytes (65 bytes)
+
+   NORMATIVE -- Signature byte ordering: the SDK MUST normalize the wallet 
+   signature response to exactly 65 bytes in the order r(32) || s(32) || v(1).
+   
+   - r and s are the ECDSA signature components, each zero-padded to 32 bytes,
+     big-endian.
+   - v is a single byte. If the wallet returns v as 0 or 1 (EIP-155 style), the 
+     SDK MUST add 27 before concatenation (producing 27 or 28). If the wallet 
+     returns v as 27 or 28, use as-is.
+   - EIP-2098 compact signatures (64 bytes) MUST be expanded to the canonical 
+     65-byte r||s||v form before use as HKDF input.
+   - The normalized 65 bytes are passed directly to HKDF-Extract as IKM. No 
+     further parsing or reordering occurs after normalization.
+   
+   This normalization is interop-critical: two SDKs that receive the same 
+   mathematical signature but serialize the components differently will derive 
+   different root_secret values. The SDK MUST include a test that verifies 
+   byte ordering against the IC-4 canonical test vector.
 
 4. SDK derives root secret:
    root_secret = HKDF(
@@ -81,12 +171,79 @@ One wallet signature, one forced backup, done. The backup is the recovery path �
 5. SDK displays anti-phish checksum (see below)
 
 6. SDK forces export of root_secret as recovery backup
-   - Download as file, OR
-   - Copy to clipboard with confirmation, OR
-   - Display as QR code
-   
-7. User confirms backup â†’ enrollment complete
+   - Download as encrypted file (PRIMARY — least exposure surface)
+   - Copy to clipboard with confirmation (SECONDARY — clipboard history,
+     browser extensions, and accessibility services can capture)
+   - Display as QR code (ADVANCED ONLY — screen recording, screenshots,
+     and shoulder-surfing can capture; should require explicit opt-in)
 ```
+
+Backup file format: the "encrypted file" export prompts the user for a 
+passphrase and produces a JSON file with the following exact schema:
+
+```json
+{
+  "format": "armada-backup-v1",
+  "kdf": "argon2id",
+  "kdf_params": { "t": 3, "m": 65536, "p": 4 },
+  "kdf_salt": "<32 bytes, hex-encoded>",
+  "cipher": "aes-256-gcm",
+  "nonce": "<12 bytes, hex-encoded>",
+  "ciphertext": "<32 bytes, hex-encoded>",
+  "tag": "<16 bytes, hex-encoded>"
+}
+```
+
+Field rules:
+- `format`: always "armada-backup-v1". Parsers MUST reject unknown format values.
+- `kdf`: one of "argon2id", "scrypt", "pbkdf2-sha256". Parsers MUST reject unknown KDF values.
+- `kdf_params`: KDF-specific. argon2id: {t, m, p}. scrypt: {N, r, p}. 
+  pbkdf2: {iterations}.
+- All binary values are lowercase hex-encoded, no "0x" prefix.
+- `tag` is the AES-GCM authentication tag, stored separately (not 
+  appended to ciphertext).
+- `ciphertext` length equals plaintext length (32 bytes for v1, since 
+  root_secret is 32 bytes). Future format versions may differ; parsers 
+  should not hard-code 32 bytes but should validate against the expected 
+  payload size for the declared format version.
+- Parsers MUST reject blobs with unknown top-level fields. This prevents 
+  format drift where one SDK silently adds metadata that another ignores.
+- Field ordering in the JSON is not significant; parsers must not depend 
+  on key order.
+
+Encryption uses AES-256-GCM with a 32-byte key derived via the KDF 
+preference hierarchy (argon2id > scrypt > PBKDF2-600k). Interop 
+contract: all compliant SDKs MUST support decrypting backups encrypted 
+with ANY of the three supported KDFs (argon2id, scrypt, PBKDF2), even 
+if they only encrypt with their preferred KDF.
+
+For clipboard and QR export, the value is the raw root_secret as a 
+hex string (no encryption). These paths trade security for convenience 
+and the user must be warned accordingly.
+
+The user must acknowledge that the root secret is equivalent to full 
+ownership of their shielded balance. Loss means permanent loss of access.
+Compromise means full compromise of privacy and funds.
+
+7. User confirms backup → enrollment complete
+
+Minimum confirmation requirement: the user must re-enter the anti-phish 
+checksum (the 12 hex characters displayed in step 5) to prove they have 
+access to a working backup. A checkbox ("I have saved my backup") is 
+NOT sufficient — it does not verify the backup is usable.
+
+For encrypted file export, the SDK MUST require a full round-trip 
+before enrollment completes: export the file, re-import it in the 
+same session, enter the passphrase, and verify the derived checksum 
+matches. Enrollment does not complete until this round-trip succeeds. 
+For clipboard/QR export, the user MUST paste back the full 64-character 
+hex secret, which the SDK verifies against the derived root_secret. 
+Checksum re-entry alone is not sufficient for raw-secret export modes 
+— it proves awareness, not restorable possession. The SDK MUST display 
+a warning: "Pasting back from clipboard only proves you have the secret 
+now. Make sure you have saved it in a persistent, secure location before 
+continuing. Closing this browser will clear your clipboard."
+
 
 ### Why EIP-712?
 
@@ -94,7 +251,7 @@ Using EIP-712 typed data instead of `personal_sign`:
 
 - Wallets display structured fields, not opaque hex
 - Domain separation prevents cross-site signature reuse
-- `verifyingContract` binds to a specific deployment
+- `verifyingContract` binds the signature to Armada's canonical enrollment domain
 - Clearer to users that this is not a transaction
 
 ### Why Signature-Derived, Not Mnemonic-Based?
@@ -102,7 +259,7 @@ Using EIP-712 typed data instead of `personal_sign`:
 Railgun wallets use BIP-39 mnemonics with BIP-32 hierarchical derivation — the standard crypto wallet pattern. Armada deliberately departs from this for integrator UX reasons:
 
 - **No second seed phrase.** Users already have a wallet. Asking them to generate, back up, and manage a separate 12/24-word mnemonic for their shielded identity adds friction that kills integrator adoption. "Connect wallet → sign → done" is the product requirement.
-- **Existing wallet as entropy source.** An ECDSA signature over structured data provides ≥128 bits of entropy (from the signing nonce `k`), which is sufficient for HKDF input. The entropy quality is different from BIP-39 (structured vs uniform), but HKDF is specifically designed to extract uniform key material from non-uniform sources.
+- **Existing wallet as entropy source.** The signature bytes are used as HKDF input under standard wallet signing assumptions. HKDF is specifically designed to extract uniform key material from non-uniform, structured sources. This is a UX-driven construction, not a claim that signature-derived entropy is superior to mnemonic-based entropy.
 - **Tradeoff acknowledged.** The mnemonic approach gives higher raw entropy (128–256 bits, uniform) and well-studied BIP-32 derivation paths. The signature approach gives lower UX friction at the cost of phishing as the primary threat vector and `issuedAt`-dependent non-reproducibility. This is an explicit product decision, not a cryptographic preference.
 
 Any future SDK that needs to interop with mnemonic-derived Railgun wallets must support both derivation paths. This spec covers signature-derived keys only.
@@ -124,28 +281,37 @@ For root derivation:
 - `info = "root"`
 - `L = 32` (output length in bytes)
 
-Note on salt: the static salt means HKDF-Extract is identical across all users — per-user entropy comes entirely from the IKM. This is acceptable per RFC 5869 ("if not available, [salt] is set to a string of HashLen zeros"), but means the salt provides no additional protection if the entropy source is ever weakened. A future version could include the wallet address in the salt (`"armada-v1:" + wallet_address`) for defense in depth without changing the UX.
+All HKDF salt and info string parameters are encoded as UTF-8 bytes before being passed to HMAC-SHA-256. For the values used in this spec (pure ASCII), UTF-8 and ASCII produce identical byte sequences. This is stated explicitly to prevent ambiguity if an implementation passes string objects to a function expecting byte arrays.
 
-For subkey derivation, `root_secret` becomes the IKM and `info` varies per key type.
+Note on salt: the static salt means HKDF-Extract is identical across all users — per-user entropy comes entirely from the IKM. This is acceptable per RFC 5869 ("if not available, [salt] is set to a string of HashLen zeros"), but means the salt provides no additional protection if the entropy source is ever weakened. A future version could include the wallet address in the salt (`"armada-v1:" + wallet_address`) for defense in depth — but note this would change derivation outputs and therefore user identity, requiring a versioned migration, not a silent upgrade.
+
+For subkey derivation, `root_secret` becomes the PRK input to HKDF-Expand (not full HKDF). Since `root_secret` is already a 32-byte pseudorandom output from the initial HKDF, running Extract again would be redundant — per RFC 5869 Section 3.3, "if the input keying material is already present as a cryptographically strong key... the extraction step is not necessary." Subkey derivation therefore uses Expand only:
+
+```
+spending_key_bytes = HKDF-Expand(PRK=root_secret, info="spend:v1", L=32)
+viewing_key_bytes  = HKDF-Expand(PRK=root_secret, info="view:v1",  L=32)
+```
+
+This is an interop-critical distinction: an implementation that runs full HKDF (Extract + Expand) with the static salt on subkey derivation will produce different output than one that runs Expand only. Both are cryptographically sound, but they are not compatible. This spec mandates Expand-only for all subkey derivation from `root_secret`.
 
 ### Derivation Tree
 
-All keys derive from `root_secret` using HKDF with explicit info strings:
+All keys derive from `root_secret` using HKDF-Expand with explicit info strings (see HKDF Semantics above for why Expand-only, not full HKDF):
 
 ```
 root_secret
-â”‚
-â”œâ”€â”€ spending_key = HKDF(root_secret, info="spend:v1")
-â”‚
-â”œâ”€â”€ viewing_key = HKDF(root_secret, info="view:v1")
-â”‚
-â””â”€â”€ integrator-scoped keys (optional)
-    â”œâ”€â”€ HKDF(root_secret, info="integrator:borderless:v1")
-    â”œâ”€â”€ HKDF(root_secret, info="integrator:foo:v1")
-    â””â”€â”€ ...
+|
+|-- spending_key = HKDF-Expand(root_secret, info="spend:v1", L=32)
+|
+|-- viewing_key = HKDF-Expand(root_secret, info="view:v1", L=32)
+|
+`-- integrator-scoped keys (FUTURE -- not v1, do not implement)
+    |-- HKDF-Expand(root_secret, info="integrator:borderless:v1", L=32)
+    |-- HKDF-Expand(root_secret, info="integrator:foo:v1", L=32)
+    `-- ...
 ```
 
-Integrator-scoped derivation provides isolation and revocation without fragmenting the user's anonymity set. It must never be used to create separate shielded identities.
+Integrator-scoped derivation (when implemented) provides isolation and revocation without fragmenting the user's anonymity set. It must never be used to create separate shielded identities.
 
 ### Bytes to Field Element Mapping
 
@@ -205,7 +371,7 @@ Andrew must determine which option matches Railgun's existing key derivation. Th
 
 For Option A, the modular reduction bias is negligible: 2^256 / r ≈ 5.3, bias on the order of 2^{-254}. Rejection sampling is not required.
 
-For Option B, the bias is larger but still negligible: 2^256 / l ≈ 4.2 × 10^25, but since l is 251 bits and the input is 256 bits, the bias is on the order of 2^{-246}. Still cryptographically irrelevant.
+For Option B, the bias is larger but still negligible: since l is 251 bits, 2^256 / l ≈ 2^5, so the maximum per-element bias is on the order of 2^{-251}. Still cryptographically irrelevant.
 
 **Viewing key conversion (architecture decision required):**
 
@@ -262,7 +428,11 @@ These boundary vectors specifically test the bytes→scalar conversion. They are
 
 **Zero-scalar safety:**
 
-Zero is a valid member of F_r (and of any subgroup), and the conversion algorithm can produce it (e.g., if HKDF output happens to equal the modulus exactly). However, zero is degenerate as a secret key — a zero spending key maps to the Baby Jubjub identity point, producing predictable nullifiers, and a zero viewing key provides no confidentiality. Whether Railgun's circuits reject zero witness inputs or treat them as valid is an implementation detail that must be checked. If any derived secret is required to be nonzero, the SDK should re-derive with an incremented info string (e.g., `"spend:v1:1"`) rather than silently accepting zero. This is astronomically unlikely in practice (probability on the order of 2^{-254}) but the spec should not leave it ambiguous. Note: the re-derive-with-incremented-info pattern introduces a second derivation branch that must be mirrored everywhere the same secret is reconstructed; Andrew should confirm this is compatible with Railgun wallet expectations before committing to a specific nonzero-enforcement mechanism.
+Zero is a valid member of F_r (and of any subgroup), and the conversion algorithm can produce it (e.g., if HKDF output happens to equal the modulus exactly). However, zero is degenerate as a secret key -- a zero spending key maps to the Baby Jubjub identity point, producing predictable nullifiers, and a zero viewing key provides no confidentiality.
+
+Preferred policy: **accept zero if the underlying circuit semantics safely allow it.** The probability is on the order of 2^{-254} -- adding permanent derivation branching complexity to handle an event this unlikely is a worse tradeoff than accepting a degenerate-but-valid key, provided the circuits don't reject it. If Andrew confirms that Railgun's circuits accept zero witness inputs without undefined behavior, the spec should accept zero and document it as a known (astronomically unlikely) degenerate case.
+
+If zero must be rejected: the SDK should re-derive with an incremented info string (e.g., `"spend:v1:1"`) rather than silently accepting zero. This introduces a second derivation branch that must be mirrored in every compatible implementation forever. Andrew should confirm this pattern is compatible with Railgun wallet expectations before committing. Do not add this complexity unless zero is actually rejected by the circuits.
 
 **Scope of application:**
 
@@ -280,13 +450,13 @@ This covers intentional spec changes. For implementation bugs where the spec was
 
 ### Per-Chain / Per-Asset Subkeys (Future)
 
-If needed, the hierarchy can extend:
+If needed, the hierarchy can extend (same Expand-only rule as all subkey derivation):
 
 ```
 spending_key
-â”œâ”€â”€ HKDF(spending_key, info="chain:1:asset:USDC")
-â”œâ”€â”€ HKDF(spending_key, info="chain:8453:asset:USDC")
-â””â”€â”€ ...
+|-- HKDF-Expand(spending_key, info="chain:1:asset:USDC", L=32)
+|-- HKDF-Expand(spending_key, info="chain:8453:asset:USDC", L=32)
+`-- ...
 ```
 
 This is not required for v1 but the structure supports it.
@@ -315,7 +485,7 @@ if (rootSecret < (1n << 64n)) {
 
 This is a diagnostic canary, not a proof of correctness. It catches the specific class of float-truncation bug that hit Privacy Pools (where ~53-bit values were produced instead of ~256-bit). But a broken implementation can produce garbage above 2^64 and pass this check. The actual defenses against derivation bugs are IC-4 (test vectors) and the normative Bytes to Field Element Mapping section — those do the real work. This assertion is a cheap early-warning tripwire, not a substitute.
 
-The same assertion applies to `spending_key` and `viewing_key` after their respective HKDF derivations.
+The same assertion applies to `spending_key` and `viewing_key` — specifically, to the raw 32-byte HKDF-Expand output **before** any modular reduction or key clamping, not to the reduced scalar. This avoids modulus-dependent edge cases (e.g., a mod-l value is 251 bits, so a correctly derived value has a nonzero but extremely small chance of being below 2^64).
 
 ### IC-3: Opaque Byte Passthrough to HKDF
 
@@ -344,7 +514,7 @@ Expected outputs:
   root_secret:  0x[32-byte hex]
   spending_key: 0x[32-byte hex]  (after field mapping)
   viewing_key:  0x[32-byte hex]  (after field mapping)
-  checksum:     [4-byte hex]
+  checksum:     [6-byte hex]
 ```
 
 Any implementation that produces different outputs for the canonical test input is broken. This is the single cheapest defense against silent derivation bugs — if Privacy Pools had shipped test vectors, `bytesToNumber` would have failed them on the first run.
@@ -370,13 +540,14 @@ The requirement is the capability. The mechanism is TBD pending circuit validati
 A short, human-recognizable fingerprint derived from the root secret:
 
 ```
-checksum = first_4_bytes(SHA256(root_secret || "armada-check"))
+checksum = first_6_bytes(SHA256(root_secret || "armada-check"))
 ```
 
+Six bytes (48 bits) provides sufficient collision resistance for a compromise-detection canary while remaining human-checkable. Four bytes (32 bits) would be adequate for accidental mismatch detection but thin for a system users may rely on as a security ritual.
+
 Display format options:
-- 8 hex characters: `a3f2 91c8`
-- Emoji pair: ðŸŒŠðŸ”
-- Short wordlist: `ocean-lock`
+- 12 hex characters in groups of 4: `a3f2 91c8 b7e0` (available now)
+- Three-word wordlist: `ocean-lock-prism` (from a curated 256-word list, 24 bits per word = 48 bits total; wordlist TBD, not yet published — use hex format until wordlist is finalized)
 
 ### When Displayed
 
@@ -386,9 +557,9 @@ Display format options:
 
 ### User Guidance
 
-"This is your privacy fingerprint. If it ever changes unexpectedly, assume your keys are compromised and contact support."
+"This is your privacy fingerprint. If it ever changes unexpectedly, assume your keys are compromised. Stop using the current session immediately, restore from a trusted backup, and do not transact until you have confirmed the restored identity matches your expected checksum."
 
-The checksum doesn't prevent phishing â€” it makes successful phishing *detectable*.
+The checksum doesn't prevent phishing -- it makes successful phishing *detectable*.
 
 ## Session Management
 
@@ -396,9 +567,10 @@ The checksum doesn't prevent phishing â€” it makes successful phishing *det
 
 After enrollment, users can restore their session by:
 
-1. **Pasting recovery secret** — the canonical recovery path. Always works regardless of wallet state, device, or browser.
-2. **Encrypted local storage** (optional, device-specific) — "remember me" convenience, see below.
-3. **Re-signing** — unreliable. Because enrollment includes `issuedAt`, re-signing produces a different signature and therefore a different identity. Re-signing can only match the original if the wallet produces deterministic signatures for identical payloads AND the SDK replays the exact original `issuedAt` value, which requires the SDK to have stored it. UX copy must never frame re-signing as a dependable recovery path. If the SDK offers re-signing at all, it must include mismatch detection (compare derived checksum against stored checksum) and a clear failure message directing users to paste their recovery secret.
+1. **Pasting recovery secret** — the canonical recovery path. Always works regardless of wallet state, device, or browser. Accepted format: 64-character hex string (the raw 32-byte `root_secret` hex-encoded, with or without `0x` prefix). The SDK must validate length and hex format before attempting derivation. This is the format produced by clipboard and QR export.
+2. **Importing encrypted backup file** — the SDK prompts for the passphrase, decrypts the JSON backup, and restores `root_secret`. This is a separate restore path from paste; the user does not paste the JSON contents.
+3. **Encrypted local storage** (optional, device-specific) — "remember me" convenience, see below.
+4. **Re-signing** — unreliable. Because enrollment includes `issuedAt`, re-signing produces a different signature and therefore a different identity. Re-signing can only match the original if the wallet produces deterministic signatures for identical payloads AND the SDK replays the exact original `issuedAt` value, which requires the SDK to have stored it. UX copy must never frame re-signing as a dependable recovery path. If the SDK offers re-signing at all, it must include mismatch detection (compare derived checksum against stored checksum) and a clear failure message directing users to paste their recovery secret.
 
 ### Encrypted Local Storage (Optional)
 
@@ -406,13 +578,18 @@ For "remember me on this device" functionality:
 
 ```
 1. User opts in to local storage
-2. SDK prompts for passcode (6+ chars)
-3. root_secret encrypted with:
-   encryption_key = PBKDF2(passcode, salt=random, iterations=â‰¥100000)
-   (or argon2id where WebCrypto support is available)
+2. SDK prompts for passphrase (16+ chars recommended; strength meter required)
+3. root_secret encrypted with (in order of preference):
+   a. argon2id(passphrase, salt=random, t=3, m=65536, p=4) — DEFAULT where available
+   b. scrypt(passphrase, salt=random, N=2^17, r=8, p=1) — fallback
+   c. PBKDF2(passphrase, salt=random, iterations=600000, hash=SHA-256) — compatibility only
 4. Encrypted blob stored in localStorage/IndexedDB
-5. To unlock: user enters passcode â†’ decrypt â†’ root_secret in memory
+5. To unlock: user enters passphrase → decrypt → root_secret in memory
 ```
+
+The KDF produces a 32-byte encryption key. The root_secret is then encrypted with **AES-256-GCM** (96-bit random nonce). The stored blob is byte-for-byte identical in schema to the `armada-backup-v1` JSON format defined in the Enrollment Flow section — same field names, same hex encoding, same auth tag placement, same rejection rules for unknown fields. The only difference is storage location (localStorage/IndexedDB vs file on disk). A compliant SDK MUST be able to take a local storage blob, save it as a file, and have it function as a valid backup — and vice versa.
+
+Memory-hard KDF (argon2id or scrypt) should be the default target, not the luxury option. PBKDF2 at 100k iterations is survivable but weak for protecting a root secret that controls real funds in 2026. The 600k minimum for PBKDF2 compatibility fallback aligns with current OWASP guidance.
 
 This is opt-in. Default behavior is stateless (paste secret or re-sign).
 
@@ -433,7 +610,9 @@ const viewKey = await armada.getViewingKey({
 });
 ```
 
-**TTL enforcement model:** TTL is enforced client-side — the SDK refuses to use an expired viewing key. This is not a cryptographic guarantee. The viewing key itself is a derived secret; anyone who obtains it can use it indefinitely by ignoring the SDK's TTL check. TTL is a policy boundary, not a cryptographic one. On-chain viewing key revocation is out of scope for v1 but should be considered if viewing key leakage becomes a practical concern.
+**TTL enforcement model:** TTL is enforced client-side — the SDK refuses to use an expired viewing key. This is not a cryptographic guarantee. The viewing key itself is a derived secret; anyone who obtains it can use it indefinitely by ignoring the SDK's TTL check. TTL is a cooperation hint to SDK-integrators, not a meaningful promise to users about privacy containment. Sharing a viewing key is effectively sharing indefinite surveillance capability over the scoped balance and transaction history. Product and BD teams must not market viewing key TTL as revocable or time-limited access — it is neither. On-chain viewing key revocation is out of scope for v1 but should be considered if viewing key leakage becomes a practical concern.
+
+**Scope enforcement model:** In v1, all integrators receive the same underlying viewing key (derived from `root_secret` via HKDF-Expand). Scope and TTL are metadata attached by the SDK, not cryptographically distinct keys. The SDK filters what it returns to the integrator based on the requested scope, but a holder of the viewing key bytes can ignore scope restrictions and decrypt all notes the key has access to. Scope is a cooperation contract with SDK-integrators, not a cryptographic containment boundary. If cryptographic scope isolation is needed in the future (where different integrators receive viewing keys that can only decrypt a subset of notes), that requires a different derivation architecture and is out of scope for v1.
 
 ### What Integrators Can Do
 
@@ -451,6 +630,20 @@ Without a spending key, integrators cannot:
 - Authorize any on-chain action
 
 Spending keys are derived just-in-time in the user's browser context, used to sign, then cleared from memory.
+
+## Key Material Handling
+
+### Web Worker Isolation
+
+All spending key operations — derivation, field mapping, proof signing — MUST run in a dedicated Web Worker (not a shared worker). The main thread never sees spending key bytes. Communication between the main thread and the worker uses `postMessage` with structured clone; the worker receives transaction intents and returns signed proofs. The spending key is derived, used, and cleared entirely within the worker's execution context.
+
+The worker should be instantiated per-operation and terminated after use, rather than kept alive as a long-running process. This limits the window during which key material exists in any memory space.
+
+### Clear-After-Use (Best-Effort)
+
+After spending key operations complete, the SDK MUST overwrite all `Uint8Array` buffers that held key material with zeros and release references. However, this spec acknowledges that **JavaScript cannot guarantee memory zeroing**. `BigInt` values are immutable and garbage-collected on the engine's schedule. The JIT compiler may retain copies. `Uint8Array.fill(0)` overwrites the buffer contents but cannot prevent the runtime from having copied the data elsewhere.
+
+This is a best-effort policy, not a cryptographic guarantee. The Web Worker isolation boundary is the primary containment mechanism — terminating the worker releases its entire memory space. For environments where stronger guarantees are required, key operations should be implemented in WebAssembly (where memory is a linear buffer that can be explicitly zeroed) rather than pure JavaScript.
 
 ## Security Model
 
@@ -475,7 +668,7 @@ Spending keys are derived just-in-time in the user's browser context, used to si
 | XSS | Web worker isolation for key operations, keys cleared after use |
 | Malicious extensions | No full mitigation; users must trust their browser environment |
 | Wallet signing changes | Recovery secret is canonical; re-signing is convenience only |
-| Derivation truncation | Normative bytes-to-field mapping, IC-1 (BigInt-only), IC-3 (opaque passthrough), IC-4 (test vectors incl. boundary vectors), IC-2 (entropy canary), IC-5 (migration capability) |
+| Derivation truncation | Normative bytes-to-field mapping, IC-1 (BigInt-only), IC-3 (opaque passthrough), IC-4 (test vectors incl. boundary vectors), IC-5 (migration capability); IC-2 (canary only, not a correctness proof) |
 
 ### Honest Assessment
 
@@ -507,7 +700,7 @@ The key hierarchy supports adding multi-factor key derivation later:
 wallet_signature (possession factor)
        +
     TOTP code (knowledge factor)
-       â†“
+       v
    root_secret (same derivation output)
 ```
 
@@ -524,19 +717,22 @@ This changes the mental model significantly and is a v2 consideration. The curre
 
 **Spec blockers** (must be resolved before spec is considered complete):
 
+- [ ] **Canonical enrollment address decided**: A single `verifyingContract` value must be chosen and frozen for all identity derivation, regardless of chain or deployment environment. Without this, the same wallet derives different shielded identities on different deployments, violating Axiom 2.
 - [ ] **Andrew confirms spending key modulus**: Does Railgun reduce spending key scalars mod `r` (BN254 scalar field, Option A) or mod `l` (Baby Jubjub subgroup order, Option B)? Both produce valid Baby Jubjub points, but the canonical range determines interoperability with existing Railgun wallets and whether in-circuit range checks pass. If mod `l`, boundary test vectors must be recomputed.
 - [ ] **Andrew confirms viewing key architecture**: Does Armada inherit Railgun's Ed25519 viewing keys (requiring mod `l_ed` reduction and Ed25519 key conventions), or define Armada-native viewing keys operating in F_r? This determines whether the derivation tree can use a single conversion function or needs key-type-aware reduction.
 - [ ] **Andrew confirms byte endianness**: Does Railgun's existing tooling interpret spending key bytes as big-endian?
-- [ ] **Andrew confirms zero-scalar acceptance**: Do the circuits accept zero as a valid spending key / nullifier input? If nonzero is required, confirm the re-derive-with-incremented-info pattern is compatible with existing Railgun wallet expectations.
+- [ ] **Andrew confirms zero-scalar acceptance**: Do the circuits accept zero as a valid spending key / nullifier input? Preferred: accept zero if safe (avoids permanent derivation branching). If nonzero is required, confirm the re-derive-with-incremented-info pattern is compatible with existing Railgun wallet expectations.
 - [ ] **HKDF hash function**: Confirm HKDF-SHA-256 (not SHA-512 or other variant).
 - [ ] **IC-4 concrete vectors**: end-to-end test vectors with real hex values (blocked on SDK implementation and above modulus decisions)
 
 **Implementation requirements:**
 
 - [ ] EIP-712 message structure defined and documented
+- [ ] Chain-agnostic EIP-712 domain tested against major wallets (MetaMask, Ledger Live, WalletConnect, major mobile wallets) — verify signing works without `chainId`, document any wallet-specific warnings or UX issues
 - [ ] HKDF derivation implemented with versioned info strings
 - [ ] Anti-phish checksum displayed post-enrollment
 - [ ] Forced recovery secret export before first use
+- [ ] Backup confirmation round-trip implemented (checksum re-entry or file re-import/decrypt)
 - [ ] Viewing key scoping and TTL defaults
 - [ ] Web worker isolation for spending key operations
 - [ ] Clear-after-use for all key material in memory
@@ -547,10 +743,10 @@ This changes the mental model significantly and is a v2 consideration. The curre
 - [ ] IC-3: Opaque byte passthrough verified (no intermediate numeric parsing)
 - [ ] IC-4: End-to-end test vectors published and validated in CI
 - [ ] IC-5: Bug-triggered migration capability validated against Railgun circuit constraints
+- [ ] Encrypted local storage (opt-in): AES-256-GCM encryption, KDF hierarchy, blob format per spec (fully specified in Session Management section)
 
 ### v1.x Considerations
 
-- [ ] Encrypted local storage option
 - [ ] Re-signing convenience flow with mismatch detection
 - [ ] Integrator telemetry (aggregate only)
 - [ ] MFKDF prototype
