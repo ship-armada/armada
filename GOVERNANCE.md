@@ -95,7 +95,7 @@ Both the numerator (votes cast) and the denominator (circulating voting power) a
 
 **Accumulate-before-snapshot, vote, sell:** An attacker buys ARM before the snapshot block, votes, then dumps. Cost is real capital exposed during at minimum the 48-hour proposal delay plus the voting period — 9+ days at standard, 16+ days at extended. A persistent attacker can extract across multiple windows, not just one. The defense model is **detection and reaction, not prevention**: treasury outflow rate limits (see §Treasury Outflow Limits) bound damage per window, the proposal delay and execution delay provide visibility windows for the community to detect hostile proposals, and the Security Council can veto during execution delay. The protocol should maintain off-chain monitoring for hostile accumulation patterns (large purchases followed by delegation changes).
 
-**Quorum suppression:** A large holder never delegates, keeping their tokens out of the denominator. This shrinks the absolute quorum threshold, making it easier for a small coalition to pass proposals. Mitigation: claim-time delegation requirement prevents tokens from sitting completely inert.
+**Quorum suppression is structurally mitigated.** Because the quorum denominator includes all circulating ARM regardless of delegation status, a holder cannot shrink the denominator by refusing to delegate. An undelegated holder's ARM still counts toward the denominator — they just can't vote. The residual risk is a large holder who delegates to themselves but never participates in votes, inflating the denominator without contributing to governance. This is a natural delegation property, not an attack — the holder's ARM is available to any proposal that reaches quorum, and the holder can be out-voted by more engaged delegates.
 
 ---
 
@@ -169,7 +169,7 @@ Classification is determined mechanically by the function selectors in the propo
 
 **Quorum floor: 100,000 ARM.** Quorum is the greater of the percentage-based threshold and this absolute floor. This prevents governance passing on near-zero turnout regardless of how much ARM has been claimed and delegated at any given time. At the base raise of 1.2M ARM, 100,000 ARM represents ~8.3% of the crowdfund allocation — meaningful coordinated participation.
 
-**Governance quiet period.** No proposals may be submitted for the first 7 days after crowdfund finalization. This is a one-time bootstrapping measure giving the community time to claim, delegate, and orient before governance begins. Any emergency during this window is handled by the Security Council.
+**Governance quiet period.** No proposals may be submitted for the first 7 days after crowdfund finalization. This is a **one-time constructor-set bootstrapping constant**, not a reusable governance parameter. It applies once and has no effect after expiry. Any emergency during this window is handled by the Security Council.
 
 All parameters are themselves governable via extended proposal.
 
@@ -360,7 +360,7 @@ Summary (non-authoritative — `ARM_TOKEN.md` takes precedence):
 
 | Allocation | % | Enforcement | Voting power |
 |---|---|---|---|
-| Crowdfund | 10–15% | Non-transferable until governance unlock | Active once claimed and delegated |
+| Crowdfund | 10–15% | Non-transferable until governance unlock; lazy settlement (aggregate finalization, per-user computation at claim time — see CROWDFUND.md) | Active once claimed and delegated |
 | Team | 15% | Shared revenue-lock contract (per-beneficiary allocations; Knowable Safe is a beneficiary like any other team member) | Proportional to revenue-unlock % |
 | Airdrop | 5% | Shared revenue-lock contract (same contract as team) | Proportional to revenue-unlock % |
 | Treasury | 65–70% | Governance-controlled; whitelisted for transfers | None — `delegate()` reverts for treasury address |
