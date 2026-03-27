@@ -246,7 +246,7 @@ This means:
 
 ### Compound-style checkpoint properties
 
-- Flash loan attacks are structurally impossible — borrowed tokens have no checkpoint history at the snapshot block.
+- Atomic flash loan attacks are structurally impossible — borrowed tokens have no checkpoint history at the snapshot block. Short-term capital attacks (hold through snapshot period) require real capital exposure for 9+ days minimum.
 - Selling after voting is allowed — voting power was fixed at snapshot.
 - Buying after proposal creation cannot be used on that vote.
 - When tokens transfer: sender's delegated power decreases, recipient starts undelegated.
