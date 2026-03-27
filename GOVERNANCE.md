@@ -75,15 +75,17 @@ Delegation persists until actively revoked. Original holders who set delegation 
 
 Quorum is measured as a percentage of **circulating voting power at the snapshot block**.
 
-In plain terms: quorum denominator = ARM that is unlocked, in circulation, and delegated.
+In plain terms: quorum denominator = `totalSupply - treasury - excludedAddresses` at the snapshot block. This is all circulating ARM regardless of delegation status.
+
+The ARM token's architectural enforcement (delegation-at-circulation for all primary paths) means nearly all circulating ARM is delegated in practice: crowdfund claims and revenue-lock releases both force delegation atomically via `delegateOnBehalf`. The only undelegated circulating ARM comes from treasury distributions where recipients haven't yet self-delegated — a small fraction that makes quorum slightly harder to reach (conservative deviation, not a risk).
 
 **Included:**
 - All claimed crowdfund tokens (delegated atomically at claim)
 - Team and airdrop tokens that have cleared their revenue milestone and been released (delegated atomically at release)
-- Any ARM distributed from treasury, once the recipient delegates (treasury transfers do not enforce atomic delegation — see §Delegation-at-circulation requirement)
+- Any ARM distributed from treasury (regardless of whether the recipient has delegated — treasury transfers do not enforce atomic delegation)
 
 **Not included:**
-- Treasury ARM (never votes)
+- Treasury ARM (excluded from denominator; `delegate()` reverts for treasury address)
 - Revenue-locked team/airdrop tokens not yet unlocked
 - Allocated-but-unclaimed crowdfund tokens (vote-inert until claimed)
 
