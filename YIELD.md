@@ -1,5 +1,5 @@
 # Shielded Yield
-Subject to change! Let's discuss 🙂‍↕️
+Subject to change! Let's discuss 🙂
 
 ## Overview
 
