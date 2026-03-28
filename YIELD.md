@@ -1,6 +1,5 @@
 # Shielded Yield
-
-âš ï¸ Subject to change! Let's discuss âš ï¸
+Subject to change! Let's discuss 🙂‍↕️
 
 ## Overview
 
@@ -261,10 +260,10 @@ Shares now worth $1.06 each (6% yield accrued)
 2. Relayer executes atomic transaction:
    a. Unshield 1000 shares to adapter (zero fee)
    b. Adapter redeems from vault â†’ 1060 USDC
-   c. Vault calculates yield fee: 9 USDC â†’ treasury
-   d. Shield 1051 USDC to user (zero fee)
+   c. Vault calculates yield fee: 6 USDC â†’ treasury
+   d. Shield 1054 USDC to user (zero fee)
 
-User now has shielded USDC note (1051 USDC)
+User now has shielded USDC note (1054 USDC)
 ```
 
 ```solidity
@@ -400,7 +399,7 @@ Redeem:
   Principal portion: 1000 USDC
   Yield: 60 USDC
   Armada fee (15%): 9 USDC â†’ treasury
-  User receives: 1051 USDC
+  User receives: 1054 USDC
   totalPrincipal: 1000 â†’ 0
 ```
 
@@ -483,7 +482,7 @@ USDC: Transfer to recipient (payment)
 | Action | Traditional DeFi | Armada |
 |--------|------------------|--------|
 | Deposit 1000 USDC to yield | Public tx | 0.5% fee, shielded |
-| Earn 6% APY (1 year) | 60 USDC (public) | 51 USDC (private) |
+| Earn 6% APY (1 year) | 60 USDC (public) | 54 USDC (private) |
 | Pay someone | Public tx + gas | Zero fee, shielded |
 | **Privacy** | None | Full |
 
