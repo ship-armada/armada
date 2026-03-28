@@ -1,5 +1,5 @@
 # Fee Structure
-âš ï¸ Subject to change! Let's discuss âš ï¸
+Subject to change! Let's discuss 👋
 
 ## Overview
 
