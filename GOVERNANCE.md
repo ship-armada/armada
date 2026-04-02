@@ -5,7 +5,7 @@
 | Section | Status |
 |---|---|
 | Voting Power (checkpointing, delegation, quorum) | Ready |
-| Proposal Lifecycle (standard/extended, bond, threshold) | Ready |
+| Proposal Lifecycle (standard/extended/signaling, bond, threshold) | Ready |
 | Parameters | Ready |
 | Scope (governable vs immutable) | Ready |
 | Treasury Outflow Limits | Ready |
@@ -102,7 +102,7 @@ Both the numerator (votes cast) and the denominator (circulating voting power) a
 ## Proposal Lifecycle
 
 ```
-1. DRAFT    → Proposer creates; 1,000 ARM bond posted (bond waived pre-transfer-unlock; see below)
+1. DRAFT    → Proposer creates; bond posted for executable proposals (see §Proposal bond)
 2. PENDING  → 48-hour visibility window (proposer can cancel; community sees it coming)
 3. ACTIVE   → Voting open: FOR / AGAINST / ABSTAIN (votes changeable during this period)
               Standard:  7 days
@@ -115,6 +115,10 @@ Both the numerator (votes cast) and the denominator (circulating voting power) a
 6. EXECUTED → On-chain, irreversible
 ```
 
+**Signaling proposals** follow steps 1–4 only. They resolve at OUTCOME and do not enter QUEUED or EXECUTED states. No bond required. See §Signaling proposals.
+
+**Executable proposals** follow steps 1–6. Bond posted at step 1 (waived pre-transfer-unlock).
+
 ### Proposal bond
 
 A bond of **1,000 ARM** is posted at submission.
@@ -125,7 +129,7 @@ A bond of **1,000 ARM** is posted at submission.
 | Quorum not met | Locked 15 days, then returned |
 | Voted down (majority AGAINST) | Locked 45 days, then returned |
 
-Bond is always returned — it is never permanently slashed. The lock period is the cost of a failed proposal, calibrated to the severity of the failure.
+Bond is always returned — it is never permanently slashed. The lock period is the cost of a failed proposal, calibrated to the severity of the failure. **Signaling proposals are exempt from the bond requirement** — they have no execution risk and the bond would suppress the low-stakes coordination the feature exists for. See §Signaling proposals.
 
 **Pre-transfer-unlock exception:** Posting a bond requires transferring ARM to the governance contract. While ARM transfers are globally restricted (see ARM_TOKEN.md §5), non-whitelisted holders cannot transfer — so bonds are technically impossible. They are also economically meaningless: "losing access" to non-transferable ARM has zero opportunity cost. **Before global transfer unlock, governance operates on proposal threshold only (12,000 delegated ARM). No bond is required.** This avoids a chicken-and-egg problem: the proposal to enable transfers must itself be creatable without a bond. The bond mechanism activates naturally once governance enables transfers.
 
@@ -151,7 +155,24 @@ All other proposals are **standard**.
 
 Classification is determined mechanically by the function selectors in the proposal calldata, not by proposer self-declaration.
 
-**Note: veto ratification votes** (see §Security Council) are a third proposal category with distinct parameters — they are triggered automatically when the SC vetoes a queued proposal, have a fixed 7-day voting period, use standard quorum, and carry the unique side effect of SC ejection on AGAINST outcome. The governor contract must implement this as a separate proposal type alongside standard and extended.
+**Note: veto ratification votes** (see §Security Council) are a fourth proposal category with distinct parameters — they are triggered automatically when the SC vetoes a queued proposal, have a fixed 7-day voting period, use standard quorum, and carry the unique side effect of SC ejection on AGAINST outcome. The governor contract must implement this as a separate proposal type alongside standard, extended, and signaling.
+
+### Signaling proposals
+
+A signaling proposal is a non-executable proposal used to measure token-holder preference. It follows the standard proposal lifecycle for submission, delay, snapshot, voting, and quorum, but has no execution phase, no queue, and no timelock delay. Its result is the final on-chain vote tally only.
+
+**No direct protocol effect.** A passed signaling proposal does not authorize execution, does not bind the Security Council, Treasury Steward, or any contract role, and does not replace the requirement for a separate executable proposal where protocol action is desired. Signaling proposals create no execution rights, obligations, or automatic follow-up.
+
+**Proposal kind is explicit on-chain.** The governor classifies proposals as `executable` or `signaling` — not inferred at runtime from empty calldata alone. This determines lifecycle behavior (execution phase skipped), bond rules, veto scope, and UI treatment. Implementation may encode signaling as empty target/calldata/value arrays, but the spec treats it as a distinct proposal type.
+
+**How they work:**
+- Proposer submits a signaling proposal with a `description` string containing the signaling text.
+- Classification is always **standard** (7-day vote, 20% quorum) — since nothing executes, extended scrutiny adds no safety value.
+- **Gate: proposal threshold only.** Pre-transfer-unlock: 12,000 ARM threshold, no bond (same as all proposals). Post-transfer-unlock: 12,000 ARM threshold, **no bond** — signaling proposals consume discourse, not operational attention or assets. Spam defense is the proposal threshold (12,000 ARM) and the 48h pending delay. If signaling spam becomes a problem, governance can introduce a per-proposer cooldown or signaling-specific bond via governor upgrade.
+- Voting works identically: FOR / AGAINST / ABSTAIN, quorum check, vote changing during the voting period.
+- **No QUEUED or EXECUTED state.** After the voting period ends, the proposal resolves to SUCCEEDED or DEFEATED based on quorum and majority. No timelock queue, no execution transaction.
+- SC veto does not apply — there is nothing queued to veto.
+- Signaling proposals do not count toward the steward circuit breaker's consecutive-low-participation tracker — they are not steward proposals.
 
 ---
 
@@ -171,7 +192,7 @@ Classification is determined mechanically by the function selectors in the propo
 
 **Governance quiet period.** No proposals may be submitted for the first 7 days after crowdfund finalization. This is a **one-time constructor-set bootstrapping constant**, not a reusable governance parameter. It applies once and has no effect after expiry. Any emergency during this window is handled by the Security Council.
 
-All parameters are themselves governable via extended proposal.
+All reusable governance parameters listed above are themselves governable via extended proposal. The one-time governance quiet period (7 days post-crowdfund finalization) is a constructor-set bootstrapping constant and is not governable — see §Governance quiet period.
 
 ---
 
@@ -200,6 +221,7 @@ All parameters are themselves governable via extended proposal.
 | **Revenue** | Non-stablecoin revenue attestation (`attestRevenue`) | Standard |
 | **Revenue** | Expand qualifying revenue definition | Extended |
 | **ARM token** | Add address to transfer whitelist (add-only, no removal) | Extended |
+| **Signaling** | Non-executable preference vote (no execution, no bond) | Standard |
 
 ### Immutable
 
@@ -445,7 +467,7 @@ Summary: Relayers set their own fees (gas cost + markup). No protocol cut. Users
 
 ### Pre-wind-down (operational)
 
-Treasury movements are executed via governance proposal. The treasury multisig executes the on-chain actions approved by governance.
+Treasury movements are executed via governance proposal. The governor/timelock executes approved proposals on-chain.
 
 - **Steward channel:** USDC payments up to $60k/rolling-30-days via pass-by-default proposals. See §Treasury Steward.
 - **Standard governance proposals:** Any treasury distribution (ARM, USDC, ETH, other assets) can be proposed through normal governance. Subject to treasury outflow limits (§Treasury Outflow Limits).
@@ -593,6 +615,9 @@ Aggregate rolling-window limits on treasury outflows. These are the primary defe
 | Contract | Upgradeable? | Mechanism | Why |
 |---|---|---|---|
 | **ARM token** | No | — | Trust bedrock. All invariants are unconditional. See ARM_TOKEN.md §9. |
+| **Treasury** | Implementation TBD (confirm with Ian) | Controlled by governor/timelock | All outflows require governance proposal execution (standard or steward channel), subject to treasury outflow limits. The treasury address is immutable in all contracts that reference it (fee module, yield vault, crowdfund, wind-down contract). The wind-down contract has pre-authorized sweep authority. The treasury cannot delegate ARM (token-enforced: `delegate()` reverts for treasury address). If the treasury is a contract (not the timelock itself), its owner/controller must be the timelock. |
+| **Crowdfund contract** | No | — | Non-upgradeable. All parameters are constructor-set. Post-finalization, all privileged functions are permanently inactive. See CROWDFUND.md. |
+| **Redemption contract** | No | — | Permissionless post-wind-down. Four excluded addresses hardcoded in constructor (treasury, revenue-lock, crowdfund, redemption). No admin, no governance interaction. |
 | **Revenue-lock contract** | No | — | Beneficiaries must trust the milestone schedule and release logic cannot change. |
 | **Wind-down contract** | No | — | Trigger conditions must be deterministic and immutable. Has pre-authorized authority to: sweep non-ARM treasury assets to redemption contract (permissionless per-token), call `setTransferable(true)`, and set `windDownActive` flag on pause contract. Parameters (threshold, deadline) are governable, but the trigger mechanism itself cannot be replaced. |
 | **Governor** | Yes | UUPS, governance-gated via timelock | Must be extensible — new proposal types, bond mechanics, steward logic. Extended proposal required. |
