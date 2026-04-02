@@ -34,7 +34,7 @@ All ARM is minted directly to final recipients in the constructor. There is no d
 | Allocation | Amount | Recipient | Notes |
 |---|---|---|---|
 | Crowdfund contract | 1,800,000 (MAX_SALE) | Crowdfund contract address | Always 1.8M regardless of elastic expansion. Verified by `loadArm()`. |
-| Treasury | 7,800,000 | Treasury multisig | |
+| Treasury | 7,800,000 | Treasury address (governance-controlled) | |
 | Team + Airdrop | 2,400,000 | Shared revenue-lock contract | See below. |
 
 The constructor also sets name, symbol, and stores the immutable configuration: whitelist addresses (crowdfund, treasury, revenue-lock), treasury address (for delegation revert), `delegateOnBehalf` caller addresses (crowdfund, revenue-lock), and `setTransferable` caller addresses (governor executor, wind-down contract).
@@ -178,7 +178,7 @@ Team and airdrop ARM has a second restriction layer independent of the global tr
 | Crowdfund | No | Yes | Yes (once claimed + delegated) | Global transfer unlock only |
 | Team | Yes | Yes | Yes (proportional to revenue unlock) | Revenue milestone AND global transfer unlock |
 | Airdrop | Yes | Yes | Yes (proportional to revenue unlock) | Revenue milestone AND global transfer unlock |
-| Treasury | No | Whitelisted (can transfer at any time) | No voting power | Procedurally: governance proposal. The token contract does not enforce this — the treasury multisig signers are responsible for only executing governance-approved transfers. |
+| Treasury | No | Whitelisted (can transfer at any time) | No voting power | Transfers require governance proposal (standard or steward channel). The token contract does not enforce this — the treasury is whitelisted for transfers, and governance controls outflows via proposal execution through the timelock. See GOVERNANCE.md §Treasury Outflow Limits. |
 
 ---
 
