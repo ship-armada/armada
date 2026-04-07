@@ -2,7 +2,7 @@
 
 ## 1. Purpose and Scope
 
-ARM is the governance and ownership token of the Armada protocol. This document specifies the ARM token contract's behavior — what the crowdfund, governance, and audit layers are allowed to assume about it.
+ARM is the governance ownership token of the Armada protocol. This document specifies the ARM token contract's behavior — what the crowdfund, governance, and audit layers are allowed to assume about it.
 
 **In scope:** ERC-20 behavior, transfer restrictions, voting/delegation mechanics, minting/burning, admin powers, upgradeability, event surface, and integration assumptions for dependent contracts.
 
@@ -295,7 +295,7 @@ The crowdfund contract relies on pre-minted ARM only. `loadArm()` verifies `bala
 
 The ARM token contract is not upgradeable. There is no proxy, no UUPS, no diamond, no beacon. The deployed bytecode is the permanent contract.
 
-**Rationale:** The ARM token is the root of the system — the governor, revenue-lock contract, and all downstream contracts reference it by address. Upgradeability would make every invariant in §12 conditional on governance not voting to change them, weakening the core trust guarantee. The custom surface area beyond battle-tested OZ primitives is small (~50 lines — see below), making the probability of a critical bug low enough to accept the migration cost in a worst case over the trust cost of upgradeability. ARM does not enter the shielded pool (it's a governance/ownership token, not a payment asset), so token migration would not affect shielded notes.
+**Rationale:** The ARM token is the root of the system — the governor, revenue-lock contract, and all downstream contracts reference it by address. Upgradeability would make every invariant in §12 conditional on governance not voting to change them, weakening the core trust guarantee. The custom surface area beyond battle-tested OZ primitives is small (~50 lines — see below), making the probability of a critical bug low enough to accept the migration cost in a worst case over the trust cost of upgradeability. ARM does not enter the shielded pool (it's a governance ownership token, not a payment asset), so token migration would not affect shielded notes.
 
 **Worst-case recovery path:** Deploy a new ARM token with fixed code, snapshot balances, coordinate migration. Every contract that references the ARM token address (governor, revenue-lock, and any future integrations) would also need to be updated or redeployed to point to the new token. Disruptive but feasible — the scope of downstream updates depends on the final architecture and should be assessed once Ian settles the contract dependency graph.
 
