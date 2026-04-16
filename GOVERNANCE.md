@@ -71,6 +71,14 @@ Delegation-at-circulation means every participant must choose a delegatee at cla
 
 Delegation persists until actively revoked. Original holders who set delegation at claim time and go dark give their delegates permanent voting weight with no expiry mechanism. Mitigation at launch relies on competitive redelegation dynamics — if a delegate behaves badly, active holders redelegate away — and on the crowdfund cohort being small and warm. A delegation expiry mechanism (e.g., delegations lapse after 6-12 months unless renewed) may be introduced via governor upgrade as the protocol matures.
 
+A further limitation: once a delegate casts a vote, individual
+delegators cannot override that vote on the specific proposal.
+Redelegation only affects future proposals (created after the
+next block). A delegator who disagrees with their delegate's
+vote on an active proposal has no on-chain recourse for that
+vote. Delegation override is a candidate for a future governor
+upgrade (see §Future governance upgrades).
+
 ### Quorum denominator
 
 Quorum is measured as a percentage of **circulating voting power at the snapshot block**.
@@ -131,29 +139,85 @@ A bond of **1,000 ARM** is posted at submission.
 
 Bond is always returned — it is never permanently slashed. The lock period is the cost of a failed proposal, calibrated to the severity of the failure. **Signaling proposals are exempt from the bond requirement** — they have no execution risk and the bond would suppress the low-stakes coordination the feature exists for. See §Signaling proposals.
 
-**Pre-transfer-unlock exception:** Posting a bond requires transferring ARM to the governance contract. While ARM transfers are globally restricted (see ARM_TOKEN.md §5), non-whitelisted holders cannot transfer — so bonds are technically impossible. They are also economically meaningless: "losing access" to non-transferable ARM has zero opportunity cost. **Before global transfer unlock, governance operates on proposal threshold only (12,000 delegated ARM). No bond is required.** This avoids a chicken-and-egg problem: the proposal to enable transfers must itself be creatable without a bond. The bond mechanism activates naturally once governance enables transfers.
+**Pre-transfer-unlock exception:** Posting a bond requires transferring ARM to the governance contract. While ARM transfers are globally restricted (see ARM_TOKEN.md §5), non-whitelisted holders cannot transfer — so bonds are technically impossible. They are also economically meaningless: "losing access" to non-transferable ARM has zero opportunity cost. **Before global transfer unlock, governance operates on proposal threshold only (5,000 delegated ARM). No bond is required.** This avoids a chicken-and-egg problem: the proposal to enable transfers must itself be creatable without a bond. The bond mechanism activates naturally once governance enables transfers.
 
 ### Proposal threshold
 
-**12,000 ARM** (0.1% of 12M total supply) must be held at snapshot to submit a proposal. An address that cannot meet the threshold can receive delegation from others to qualify.
+**5,000 ARM** (0.042% of 12M total supply) must be held at snapshot to submit a proposal. An address that cannot meet the threshold can receive delegation from others to qualify.
 
 ### Standard vs. extended classification
 
-A proposal is automatically **extended** if it touches any of the following:
+A proposal is automatically **extended** if it grants authority,
+loosens constraints, or increases risk exposure:
 
-- Any fee parameter (shield fee, yield fee, volume tiers) — increases or decreases
-- Treasury allocation exceeding 5% of current treasury balance
-- Governance parameter changes (quorum, quorum floor, voting period, execution delay, bond, threshold)
-- Treasury Steward election or removal
-- Security Council seat changes via governance
-- Contract upgrades (governor, fee module, revenue counter)
-- ARM token whitelist additions
-- Expanding the qualifying revenue definition
-- Treasury outflow rate limit changes
+* Fee parameter increases
+* Treasury allocation exceeding 5% of current treasury balance
+* Treasury Steward election
+* Security Council seat changes via governance
+* Contract upgrades (governor, fee module, revenue counter)
+* ARM token whitelist additions
+* Expanding the qualifying revenue definition
+* Treasury outflow rate limit increases or window extensions
+* Quorum decreases
+* Voting period decreases
+* Execution delay decreases
 
-All other proposals are **standard**.
+A proposal is **standard** if it revokes authority, tightens
+constraints, or reduces risk exposure:
 
-Classification is determined mechanically by the function selectors in the proposal calldata, not by proposer self-declaration.
+* Treasury Steward removal
+* Fee parameter decreases
+* Treasury outflow rate limit decreases or window reductions
+* Quorum increases
+* Voting period increases
+* Execution delay increases
+
+All other proposals — including treasury allocations within 5%
+and routine operational actions — are **standard**.
+
+**Design principle: tightening is easy, loosening is hard.** Actions
+that reduce the protocol's attack surface or revoke granted
+authority should face lower governance friction than actions that
+expand it. This mirrors the asymmetric activation delay on treasury
+outflow parameters (see §Treasury Outflow Limits) and extends the
+principle to the full proposal classification system.
+
+**Mixed-direction actions remain extended.** Security Council
+replacement (simultaneously revoking one council and installing
+another) and contract upgrades (replacing logic entirely) are
+classified as extended regardless of intent, because the loosening
+component dominates the risk profile.
+
+**Classification mapping:**
+
+| Setter / action | Extended (loosening) | Standard (tightening) |
+|---|---|---|
+| Fee parameters | Increase | Decrease |
+| Treasury outflow limit | Increase limit or extend window | Decrease limit or shorten window |
+| Quorum | Decrease | Increase |
+| Voting period | Decrease (less scrutiny time) | Increase (more scrutiny time) |
+| Execution delay | Decrease (less veto time) | Increase (more veto time) |
+| Treasury Steward | Election | Removal |
+| Whitelist addition | Always extended | — (no removal path) |
+| Contract upgrade | Always extended | — |
+| SC replacement | Always extended | — |
+| Revenue definition expansion | Always extended | — |
+
+Classification is determined mechanically by calldata and, where
+direction matters, comparison of proposed values against current
+on-chain state. Selector matching alone is insufficient for
+directional parameters — the classifier must read the current
+value and compare against the proposed value to determine whether
+the change is loosening or tightening.
+
+For classifications that depend on treasury-relative thresholds
+(e.g., "allocation > 5% of treasury balance"), the reference value
+must be fixed at proposal creation or queue time and stored with
+the proposal. Classification must not vary with treasury balance
+changes between creation and execution.
+
+If any action in a batched proposal is classified as extended, the
+entire proposal is extended.
 
 **Note: veto ratification votes** (see §Security Council) are a fourth proposal category with distinct parameters — they are triggered automatically when the SC vetoes a queued proposal, have a fixed 7-day voting period, use standard quorum, and carry the unique side effect of SC ejection on AGAINST outcome. The governor contract must implement this as a separate proposal type alongside standard, extended, and signaling.
 
@@ -168,7 +232,7 @@ A signaling proposal is a non-executable proposal used to measure token-holder p
 **How they work:**
 - Proposer submits a signaling proposal with a `description` string containing the signaling text.
 - Classification is always **standard** (7-day vote, 20% quorum) — since nothing executes, extended scrutiny adds no safety value.
-- **Gate: proposal threshold only.** Pre-transfer-unlock: 12,000 ARM threshold, no bond (same as all proposals). Post-transfer-unlock: 12,000 ARM threshold, **no bond** — signaling proposals consume discourse, not operational attention or assets. Spam defense is the proposal threshold (12,000 ARM) and the 48h pending delay. If signaling spam becomes a problem, governance can introduce a per-proposer cooldown or signaling-specific bond via governor upgrade.
+- **Gate: proposal threshold only.** Pre-transfer-unlock: 5,000 ARM threshold, no bond (same as all proposals). Post-transfer-unlock: 5,000 ARM threshold, **no bond** — signaling proposals consume discourse, not operational attention or assets. Spam defense is the proposal threshold (5,000 ARM) and the 48h pending delay. If signaling spam becomes a problem, governance can introduce a per-proposer cooldown or signaling-specific bond via governor upgrade.
 - Voting works identically: FOR / AGAINST / ABSTAIN, quorum check, vote changing during the voting period.
 - **No QUEUED or EXECUTED state.** After the voting period ends, the proposal resolves to SUCCEEDED or DEFEATED based on quorum and majority. No timelock queue, no execution transaction.
 - SC veto does not apply — there is nothing queued to veto.
@@ -180,7 +244,7 @@ A signaling proposal is a non-executable proposal used to measure token-holder p
 
 | Parameter | Standard | Extended |
 |-----------|----------|----------|
-| Proposal threshold | 12,000 ARM | 12,000 ARM |
+| Proposal threshold | 5,000 ARM | 5,000 ARM |
 | Bond | 1,000 ARM | 1,000 ARM |
 | Quorum | max(20% of circulating voting power, 100,000 ARM) | max(30% of circulating voting power, 100,000 ARM) |
 | Proposal delay | 48 hours | 48 hours |
@@ -383,8 +447,7 @@ Summary (non-authoritative — `ARM_TOKEN.md` takes precedence):
 | Allocation | % | Enforcement | Voting power |
 |---|---|---|---|
 | Crowdfund | 10–15% | Non-transferable until governance unlock; lazy settlement (aggregate finalization, per-user computation at claim time — see CROWDFUND.md) | Active once claimed and delegated |
-| Team | 15% | Shared revenue-lock contract (per-beneficiary allocations; Knowable Safe is a beneficiary like any other team member) | Proportional to revenue-unlock % |
-| Airdrop | 5% | Shared revenue-lock contract (same contract as team) | Proportional to revenue-unlock % |
+| Early network (team + airdrop) | 20% | Single shared revenue-lock contract. 15% launch team (per-beneficiary allocations; Knowable Safe is a beneficiary like any other team member) + 5% ecosystem airdrop. All subject to revenue-gated unlock. | Proportional to revenue-unlock % |
 | Treasury | 65–70% | Governance-controlled; whitelisted for transfers | None — `delegate()` reverts for treasury address |
 
 ### Revenue-Gated Unlocks
@@ -684,3 +747,16 @@ The following mechanisms are candidates for governance upgrades as the protocol 
 - **Delegation expiry.** Delegations lapse after 6-12 months unless renewed. Prevents permanent power accumulation by early delegates.
 - **Integrator governance participation.** Volume-weighted integrator input on fee and integration policy.
 - **Surplus deployment mechanisms.** Buyback execution engine (MAB), direct fee distribution, or hybrid — governance decides based on conditions. See §Treasury Distributions.
+- **Delegation override (liquid democracy).** Allow delegators
+  to override their delegate's vote on a specific proposal after
+  the delegate has cast it. The delegator's portion of voting
+  power is subtracted from the delegate's vote and applied
+  independently. This addresses the limitation that once a
+  delegate votes, delegators who disagree have no recourse on
+  that proposal — redelegation only takes effect for future
+  proposals. Implementation requires tracking each delegator's
+  contribution to a delegate's snapshot balance, decrementing
+  already-cast votes, and handling gas costs that scale with
+  override count. Related designs exist in liquid-democracy-style
+  governance systems. This is a governor upgrade, not a token
+  change.
