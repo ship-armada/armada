@@ -27,13 +27,9 @@ ARM is the governance and ownership token of the Armada protocol. This document 
 
 ## 3. Genesis Allocation
 
-ARM is minted to the deployer (`initialHolder`) in the constructor via a single `_mint()` call, then distributed to final recipients (RevenueLock, Crowdfund, Treasury) as part of the deployment sequence. This is the standard ERC-20 deployment pattern — it avoids fragile CREATE2 precomputed address dependencies and matches OpenZeppelin's recommended approach. The deployer retains no ARM after the distribution sequence completes; this is verified by the deployment checklist (see REVENUE_LOCK.md §12).
+### Mint and Distribution
 
-**Deployment sequence:**
-1. Deploy ARM token — 12,000,000 ARM minted to deployer
-2. Deploy RevenueLock, Crowdfund, Treasury (or confirm their addresses)
-3. Deployer transfers to each final recipient per the table below
-4. Verify deployer ARM balance = 0
+ARM is minted to an initial bootstrap holder (the deployer address — **required to be a deployment multisig, not a single EOA**) in the `ArmadaToken` constructor via a single `_mint()` call, then distributed during the deterministic deployment sequence to the three final recipients. This is the standard ERC-20 deployment pattern; it avoids fragile CREATE2 precomputed address dependencies.
 
 **Final recipient allocations:**
 
@@ -41,13 +37,38 @@ ARM is minted to the deployer (`initialHolder`) in the constructor via a single 
 |---|---|---|---|
 | Crowdfund contract | 1,800,000 (MAX_SALE) | Crowdfund contract address | Always 1.8M regardless of elastic expansion. Verified by `loadArm()`. |
 | Treasury | 7,800,000 | Treasury address (governance-controlled) | |
-| Team + Airdrop | 2,400,000 | Shared revenue-lock contract | See below. |
+| Team + Airdrop | 2,400,000 | Shared revenue-lock contract | See Revenue-lock architecture below. |
+
+The protocol is not considered live until deployment verification confirms all four conditions:
+
+1. **Exact recipient balances.** RevenueLock holds 2,400,000 ARM, Crowdfund holds 1,800,000 ARM, Treasury holds 7,800,000 ARM.
+2. **Supply conservation.** `ARM.totalSupply()` = 12,000,000 × 10^18. The sum of the three recipient balances equals `totalSupply()`.
+3. **Zero residual bootstrap-holder balance.** The bootstrap holder must end with exactly zero ARM after distribution completes. Any residual balance is a deployment failure.
+4. **No residual bootstrap-holder allowances.** The bootstrap holder must have no remaining ERC-20 allowances in any protocol contract after distribution. Note: the bootstrap holder's whitelist entry in the ARM token persists permanently (the whitelist is add-only — there is no removal path). The security property post-distribution is that the entry is *inert while the balance is zero*: a zero-balance whitelisted address cannot transfer tokens it doesn't hold. Do not send ARM to the bootstrap holder address after distribution completes.
+
+See REVENUE_LOCK.md §12 (Deployment Checklist) for the specific verification steps.
+
+### Deployment-Window Considerations
+
+Between constructor mint and distribution completion, the bootstrap holder has custodial control of the full 12M ARM supply. This is a real but bounded risk:
+
+- **Compromise scope.** A compromised bootstrap holder during the deployment window controls the entire supply. **Mitigation (required):** the bootstrap holder must be a deployment multisig. A single EOA is not acceptable.
+- **Incomplete execution.** A partial or interrupted deployment leaves the system in an ambiguous state where the bootstrap holder still retains some ARM. **Mitigation:** the deployment script must be idempotent and recoverable, with explicit verification gates preventing the protocol from being declared live in an incomplete state.
+- **Script correctness.** Recipient addresses in the deployment script are trusted inputs. **Mitigation:** addresses must be cross-checked against the CREATE2 precomputation from REVENUE_LOCK.md §12, and the deployment script itself is part of the audit handoff.
+
+The security model is: **constructor + deployment script + post-deployment verification**. All three must complete correctly for genesis allocation to be considered valid. The protocol is not live until post-deployment verification passes.
+
+### Bootstrap-holder whitelisting
+
+The bootstrap holder is whitelisted in the `ArmadaToken` constructor to permit the distribution transfers while global transfers are restricted. This is a real, ongoing privilege: a whitelisted address can send ARM at any time while global transfers are restricted. However, the risk is bounded in a specific way: once the bootstrap holder's ARM balance reaches zero after distribution, it cannot transfer tokens it doesn't hold.
+
+The whitelist entry persists permanently (the whitelist is add-only). The security claim is therefore narrower than "no residual privilege" — it is: **the bootstrap holder's whitelist entry is inert once its balance is zero, because privilege requires both whitelist status and token balance to be exercised.** If the bootstrap holder were to receive ARM again (e.g. via an erroneous transfer), it could send those tokens while transfers are restricted. This is an operational risk, not a structural one: after distribution completes, do not send ARM to the bootstrap holder address.
 
 The constructor also sets name, symbol, and stores the immutable configuration: whitelist addresses (crowdfund, treasury, revenue-lock), treasury address (for delegation revert), `delegateOnBehalf` caller addresses (crowdfund, revenue-lock), and `setTransferable` caller addresses (governor executor, wind-down contract).
 
-**Deployer whitelisting.** The deployer holds ARM transiently during the distribution sequence. The deployer is whitelisted for this window to permit the distribution transfers while global transfers are restricted. Once distribution completes and the deployer balance reaches zero, the whitelist entry is inert — the deployer holds nothing and the add-only whitelist means this entry cannot be removed, but it poses no ongoing risk because a zero-balance whitelisted address cannot transfer tokens it doesn't hold.
+### Revenue-lock contract architecture
 
-**Revenue-lock contract architecture:** A single shared revenue-lock contract holds all team and airdrop ARM (2,400,000 total). The contract tracks per-beneficiary allocations internally:
+A single shared revenue-lock contract holds all team and airdrop ARM (2,400,000 total). The contract tracks per-beneficiary allocations internally:
 
 - **Beneficiary list** is set at deployment: each team member, each airdrop recipient, and the Knowable Safe (which holds the portion reserved for future contributors) are all entries in the same list with their respective amounts.
 - **Release logic** is identical for all beneficiaries: as revenue milestones are reached, each beneficiary can call `release(delegatee)` to withdraw their unlocked percentage. ARM is transferred and delegated atomically.
@@ -170,11 +191,25 @@ Team and airdrop ARM has a second restriction layer independent of the global tr
 | $500k | 80% | 80% |
 | $1M | 100% | 100% |
 
+**Revenue-gated unlock mechanism**
+
+RevenueLock releases team and airdrop ARM allocations according to the milestone schedule above, tied to cumulative protocol revenue. Revenue is read from RevenueCounter, a UUPS-upgradeable contract. RevenueLock enforces a monotonic, rate-limited view of observed revenue. Two properties hold regardless of RevenueCounter implementation:
+
+1. **No rewind.** Once a revenue level has been observed and recorded in `maxObservedRevenue`, it cannot be reduced by subsequent RevenueCounter upgrades. Unlocked allocations remain unlocked. Beneficiaries who have not yet claimed are never retroactively frozen.
+
+2. **No instant acceleration.** Upward movement of `maxObservedRevenue` is capped at a hardcoded rate (`MAX_REVENUE_INCREASE_PER_DAY`, set immutably at deployment). Even if RevenueCounter reports an arbitrary high value, `maxObservedRevenue` only advances at the hardcoded rate per elapsed day since last sync.
+
+Anyone can call `syncObservedRevenue()` to advance the ratchet without claiming. Monitoring infrastructure calls this at least daily to keep the effective rate cap tight.
+
+**Operational requirement for rate-limit tightness.** The no-instant-acceleration guarantee assumes `syncObservedRevenue()` is called regularly by monitoring infrastructure. Without regular syncs, long idle periods allow rate-limit allowance to accumulate. Armada's monitoring infrastructure calls `syncObservedRevenue()` at least daily. This operational discipline is part of the security model. See OPERATIONS.md and MONITORING.md for the sync runbook.
+
+**Suppression remains a governance capture concern.** Governance can upgrade RevenueCounter to underreport actual revenue, which would delay unlocks. RevenueLock cannot structurally defend against this. Defense against malicious suppression is Security Council veto of the RevenueCounter upgrade proposal and community response.
+
 **Key properties:**
 - Revenue milestones cannot be changed by governance. The schedule is immutable.
-- Revenue measurement source: **`RevenueCounter` contract** — a dedicated governance-upgradeable (UUPS) contract holding a single monotonic `recognizedRevenueUsd` counter (see GOVERNANCE.md §Revenue Counter Mechanism). Stablecoin fees are synced permissionlessly; non-stablecoin fees require a governance attestation. The revenue-lock contract reads this counter via an immutable proxy address set at deployment.
+- Revenue measurement source: `RevenueCounter` (UUPS proxy) — read via `maxObservedRevenue` ratchet, not directly. The ratchet is monotonic and rate-limited.
 - Team/airdrop tokens gain voting power proportionally as they unlock — at $0 revenue, team and airdrop ARM has zero voting power regardless of delegation.
-- Governance cannot override or accelerate team/airdrop unlocks. They unlock only via revenue.
+- Governance cannot instantly accelerate team/airdrop unlocks. Acceleration via malicious RevenueCounter upgrade is rate-limited to `MAX_REVENUE_INCREASE_PER_DAY`.
 - These restrictions are independent of the global transfer gate. A team member whose ARM is 50% revenue-unlocked still cannot transfer until governance enables global transfers.
 
 ### 5.2 Transfer restriction summary by allocation
