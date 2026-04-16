@@ -2,7 +2,7 @@
 
 ## 1. Purpose and Scope
 
-ARM is the governance ownership token of the Armada protocol. This document specifies the ARM token contract's behavior — what the crowdfund, governance, and audit layers are allowed to assume about it.
+ARM is the governance and ownership token of the Armada protocol. This document specifies the ARM token contract's behavior — what the crowdfund, governance, and audit layers are allowed to assume about it.
 
 **In scope:** ERC-20 behavior, transfer restrictions, voting/delegation mechanics, minting/burning, admin powers, upgradeability, event surface, and integration assumptions for dependent contracts.
 
@@ -27,9 +27,15 @@ ARM is the governance ownership token of the Armada protocol. This document spec
 
 ## 3. Genesis Allocation
 
-All ARM is minted directly to final recipients in the constructor. There is no deployer holding — the constructor calls `_mint()` for each recipient, so ARM never passes through an intermediate address.
+ARM is minted to the deployer (`initialHolder`) in the constructor via a single `_mint()` call, then distributed to final recipients (RevenueLock, Crowdfund, Treasury) as part of the deployment sequence. This is the standard ERC-20 deployment pattern — it avoids fragile CREATE2 precomputed address dependencies and matches OpenZeppelin's recommended approach. The deployer retains no ARM after the distribution sequence completes; this is verified by the deployment checklist (see REVENUE_LOCK.md §12).
 
-**Constructor mints:**
+**Deployment sequence:**
+1. Deploy ARM token — 12,000,000 ARM minted to deployer
+2. Deploy RevenueLock, Crowdfund, Treasury (or confirm their addresses)
+3. Deployer transfers to each final recipient per the table below
+4. Verify deployer ARM balance = 0
+
+**Final recipient allocations:**
 
 | Allocation | Amount | Recipient | Notes |
 |---|---|---|---|
@@ -39,7 +45,7 @@ All ARM is minted directly to final recipients in the constructor. There is no d
 
 The constructor also sets name, symbol, and stores the immutable configuration: whitelist addresses (crowdfund, treasury, revenue-lock), treasury address (for delegation revert), `delegateOnBehalf` caller addresses (crowdfund, revenue-lock), and `setTransferable` caller addresses (governor executor, wind-down contract).
 
-**No deployer in the whitelist.** The deployer address never holds ARM and is not whitelisted. This eliminates a trust-surface issue: if the deployer were permanently whitelisted (the whitelist is add-only), it could become a special pre-unlock transferable holder if it ever received ARM while transfers were restricted.
+**Deployer whitelisting.** The deployer holds ARM transiently during the distribution sequence. The deployer is whitelisted for this window to permit the distribution transfers while global transfers are restricted. Once distribution completes and the deployer balance reaches zero, the whitelist entry is inert — the deployer holds nothing and the add-only whitelist means this entry cannot be removed, but it poses no ongoing risk because a zero-balance whitelisted address cannot transfer tokens it doesn't hold.
 
 **Revenue-lock contract architecture:** A single shared revenue-lock contract holds all team and airdrop ARM (2,400,000 total). The contract tracks per-beneficiary allocations internally:
 
@@ -295,7 +301,7 @@ The crowdfund contract relies on pre-minted ARM only. `loadArm()` verifies `bala
 
 The ARM token contract is not upgradeable. There is no proxy, no UUPS, no diamond, no beacon. The deployed bytecode is the permanent contract.
 
-**Rationale:** The ARM token is the root of the system — the governor, revenue-lock contract, and all downstream contracts reference it by address. Upgradeability would make every invariant in §12 conditional on governance not voting to change them, weakening the core trust guarantee. The custom surface area beyond battle-tested OZ primitives is small (~50 lines — see below), making the probability of a critical bug low enough to accept the migration cost in a worst case over the trust cost of upgradeability. ARM does not enter the shielded pool (it's a governance ownership token, not a payment asset), so token migration would not affect shielded notes.
+**Rationale:** The ARM token is the root of the system — the governor, revenue-lock contract, and all downstream contracts reference it by address. Upgradeability would make every invariant in §12 conditional on governance not voting to change them, weakening the core trust guarantee. The custom surface area beyond battle-tested OZ primitives is small (~50 lines — see below), making the probability of a critical bug low enough to accept the migration cost in a worst case over the trust cost of upgradeability. ARM does not enter the shielded pool (it's a governance/ownership token, not a payment asset), so token migration would not affect shielded notes.
 
 **Worst-case recovery path:** Deploy a new ARM token with fixed code, snapshot balances, coordinate migration. Every contract that references the ARM token address (governor, revenue-lock, and any future integrations) would also need to be updated or redeployed to point to the new token. Disruptive but feasible — the scope of downstream updates depends on the final architecture and should be assessed once Ian settles the contract dependency graph.
 
