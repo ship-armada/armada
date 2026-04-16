@@ -408,13 +408,30 @@ When the Security Council vetoes a queued proposal:
 2. **SC vetoes** during the execution delay window. The proposal is cancelled. SC must publish a written rationale (off-chain, with on-chain hash for verifiability).
 3. **A 7-day veto ratification vote begins automatically.** The question: "Uphold the Security Council's veto?"
    - **FOR (uphold veto):** The vetoed proposal is permanently cancelled. The SC acted correctly in the community's view.
-   - **AGAINST (deny veto):** The vetoed proposal can be re-submitted. **The current Security Council multisig is ejected** — its address is removed from the governor contract. Governance must elect a new SC via extended proposal. During the gap, no SC powers are available (no pause, no veto).
+   - **AGAINST (deny veto):** The original vetoed proposal is
+     restored. The current Security Council multisig is ejected
+     — its address is removed from the governor contract.
+     Governance must elect a new SC via extended proposal. During
+     the gap, no SC powers are available (no pause, no veto).
+
+     The proposal is re-scheduled in the timelock with a fresh
+     2-day delay (the timelock's minimum). Execution remains a
+     separate transaction — restoration does not auto-execute.
+     No re-submission is required. The community has voted twice
+     (once to pass the original proposal, once to deny the veto).
    - **Quorum not met:** Veto stands by default. If the community can't mobilize to override, the SC's security judgment holds.
 4. Ratification uses **standard quorum** (20% of circulating voting power or 100,000 ARM).
 
 **The ejection consequence is the accountability mechanism.** The SC only vetoes when they're genuinely confident the community will back them — vetoing a proposal the community wanted means losing the seat. This replaces the need for a separate SC bond or punishment mechanism.
 
-**No double veto.** If a vetoed-and-denied proposal is re-submitted and passes again, the newly elected SC cannot veto it. The community has spoken twice. **On-chain enforcement:** the governor stores the calldata hash of each vetoed-and-denied proposal. If a new proposal has an identical calldata hash, the SC's `veto()` call reverts. Slight modifications to the proposal (different parameters, different recipient) produce a different hash and are vetoable — the community spoke on the specific proposal, not on variations.
+**Single-veto rule.** A restored proposal cannot be vetoed again.
+This is enforced per-proposal — the governor sets a flag when a
+veto ratification vote resolves to AGAINST. If a newly elected SC
+attempts to veto the restored proposal, the call reverts. This
+protection is scoped to the specific restored proposal instance,
+not to its calldata. A future proposal with identical calldata
+submitted under different circumstances is a new proposal and
+may be vetoed normally.
 
 ### Composition
 
