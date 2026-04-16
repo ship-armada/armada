@@ -608,6 +608,32 @@ Aggregate rolling-window limits on treasury outflows. These are the primary defe
 - **The percentage scales with treasury size.** On a $1M treasury, the USDC limit is $100k (floor binding). On a $5M treasury, the limit is $500k (10% binding). This allows the protocol to grow without constant parameter adjustments.
 - **The minimum floors are immutable.** Governance can raise the percentage or the floor, but cannot reduce below $50k USDC or 100k ARM. This prevents a captured governance from zeroing the limits.
 
+### Asymmetric activation delay for outflow parameter changes
+
+All outflow parameter changes are asymmetric:
+
+- **Tightening changes take effect immediately.** Any change that reduces spending capacity is a security-improving action and is never delayed.
+- **Loosening changes are subject to a 24-day activation delay.** Any change that increases spending capacity is written to a pending slot and activates only after the delay expires. Treasury outflow checks read active parameters, not pending ones.
+
+The 24-day activation delay exceeds the maximum Extended proposal governance cycle (2-day proposal delay + 14-day voting period + 7-day execution delay = 23 days). Governor timing parameter setters enforce that the Extended cycle remains strictly shorter than the activation delay (`_maxExtendedCycle() < LIMIT_ACTIVATION_DELAY`).
+
+This structurally prevents two attack patterns:
+
+- **Atomic batch attack:** a single proposal cannot batch a parameter loosening and a treasury drain. The drain executes against the old (tighter) active parameters and reverts.
+- **Pre-execution overlap:** a drain proposal submitted *before* the parameter-loosening proposal executes will complete its own governance cycle before the pending change activates, so it executes against the old parameters and reverts.
+
+Under governance capture and current timings, the minimum drain timeline is approximately 47 days across two separate Extended proposals, each with an independent Security Council veto opportunity and 24 days of publicly-visible pending state between them.
+
+**Residual gap:** a drain proposal submitted *after* the parameter-loosening proposal executes but *before* the pending change activates can be timed to execute at or after activation and benefit from the loosened parameters. Closing this gap requires proposal-time snapshotting of outflow parameters, where treasury-spend proposals are evaluated against the parameters active when they were queued rather than when they execute. This is planned as a post-launch governor upgrade and would extend the minimum drain timeline to approximately 70 days across two fully separated governance cycles.
+
+The pending parameter values are publicly readable from storage at all times. During the 24-day activation window, any token holder or monitoring system can observe that a loosening change is pending. External monitoring infrastructure subscribes to `OutflowLimitIncreaseScheduled`, `OutflowLimitActivated`, and `OutflowLimitDecreased` events for real-time visibility.
+
+Governance can cancel a pending loosening by passing a proposal that sets the parameter to the current active value or lower. Since this is a tightening change, it takes effect immediately and clears the pending state.
+
+If governance submits a new loosening change while a previous one is still pending, the new value replaces the pending change and resets the 24-day activation timer. Governance's most recent decision is authoritative.
+
+**Upgradeability caveat:** `ArmadaTreasuryGov` is UUPS-upgradeable via governance proposal. A malicious governance upgrade could replace the contract logic including the delay mechanism itself. The defense against malicious upgrades is the Security Council veto during the upgrade proposal's execution delay window, combined with community review of new implementations. This is a fundamental property of upgradeable contracts, not a limitation specific to the outflow delay mechanism.
+
 ---
 
 ## Contract Upgrade Scope
