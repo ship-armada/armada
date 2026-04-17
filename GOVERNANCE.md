@@ -571,19 +571,19 @@ Treasury movements are executed via governance proposal. The governor/timelock e
 
 ### Surplus deployment (future)
 
-When protocol revenue consistently exceeds operational needs, governance may deploy surplus capital. **No mechanism is predetermined.** The appropriate approach depends on protocol maturity, revenue scale, ARM liquidity depth, and holder behavior at the time.
+When protocol revenue consistently exceeds operational needs, governance may deploy surplus treasury resources. **No mechanism is predetermined.** The appropriate approach depends on protocol maturity, revenue scale, ARM liquidity depth, and governance priorities at the time.
 
 **Defining "operational needs":** Operational needs include committed expenses (team compensation, infrastructure, audits, integrator incentives) and a target runway buffer. Revenue exceeds operational needs when projected runway remains above the target buffer after the proposed allocation. Governance should establish and maintain a target runway (e.g., 12-24 months of committed expenses) as the threshold below which surplus deployment is inappropriate.
 
-**The wind-down redemption reference value.** ARM has a governance-backed redemption reference value: `non-ARM treasury assets / circulating ARM`. If ARM trades materially below this value, holders have a credible path to realize it through wind-down — subject to governance coordination and execution delay. This is not a hard arbitrage floor (wind-down requires delegate alignment, quorum, and time to execute — ARM can trade below redemption value for meaningful periods if governance doesn't mobilize). But it means the treasury's primary job is not supporting ARM price — the wind-down right provides a credible backstop. The surplus deployment question is therefore: how should governance deploy capital above this reference value to maximize long-term protocol value?
+**Wind-down as termination mechanism.** If ARM holders vote to wind down the protocol, remaining non-ARM treasury assets are distributed proportionally to ARM holders. This is a termination mechanism — it provides an orderly exit if governance decides the protocol should not continue. It is not a price floor, a guaranteed return, or an arbitrage mechanism. Wind-down requires governance coordination, quorum, and execution time.
 
 **Available options (individually or in combination):**
 
-**Treasury accumulation.** Builds reserves and extends operational runway. Most appropriate in early stages or uncertain conditions. This is the default — surplus stays in the treasury until governance actively decides otherwise. A growing treasury directly increases the wind-down redemption floor, providing tangible backing for ARM.
+**Treasury accumulation.** Builds reserves and extends operational runway. Most appropriate in early stages or uncertain conditions. This is the default — surplus stays in the treasury until governance actively decides otherwise.
 
-**ARM buybacks.** Deploys surplus USDC to acquire ARM from the market. Provides market liquidity and may create a demand signal, but is an indirect and lossy value transfer mechanism (USDC → market → price → holder value leaks at every step via spreads, MEV, and seller behavior). Most effective when ARM liquidity is thin and there is no structural sell pressure. Should be market-aware and conditional (e.g., only execute when price is below a moving average) — not fixed-schedule. See MAB (Market-Aware Buyback) architecture as a reference execution engine. **Buybacks should not be used when:** treasury reserves fall below the runway target, liquidity conditions make execution inefficient (high slippage), or there is evidence of sustained sell pressure overwhelming buys (the buyback becomes exit liquidity, not market formation).
+**ARM buybacks.** Governance may vote to deploy surplus USDC to acquire ARM from the market, reducing circulating supply. Should be market-aware and conditional (e.g., only execute when price is below a moving average) — not fixed-schedule. See MAB (Market-Aware Buyback) architecture as a reference execution engine. **Buybacks should not be used when:** treasury reserves fall below the runway target, liquidity conditions make execution inefficient (high slippage), or there is evidence of sustained sell pressure overwhelming buys (the buyback becomes exit liquidity, not market formation).
 
-**Direct fee distribution.** Distributes surplus (e.g., USDC) pro-rata to ARM holders who have delegated. Most capital-efficient value transfer (~100% of surplus reaches holders). Appropriate only when revenue meaningfully exceeds operational needs and distribution size justifies gas and coordination costs. At low revenue levels, per-holder distributions may be negligible relative to claim costs. **Only delegated ARM participates in distributions — undelegated tokens are excluded.** Self-delegation counts. This aligns value distribution with governance participation: earning from the protocol requires being active in its governance.
+**Direct surplus distribution.** Governance may vote to distribute surplus treasury assets (e.g., USDC) to delegated ARM holders. This is a governance decision requiring tokenholder approval. Appropriate only when revenue meaningfully exceeds operational needs and distribution size justifies gas and coordination costs. At low revenue levels, per-holder distributions may be negligible relative to claim costs. **Only delegated ARM participates in distributions — undelegated tokens are excluded.** Self-delegation counts.
 
 **Phase guidance for governance:**
 
@@ -591,9 +591,9 @@ When protocol revenue consistently exceeds operational needs, governance may dep
 |---|---|---|
 | Early (post-launch) | Revenue ≤ operational needs | Treasury accumulation. All revenue funds growth and operations via steward budget. |
 | Growth | Revenue exceeds operations but ARM liquidity is thin | Treasury accumulation + optional conditional buybacks for market formation (not price defense). |
-| Mature | Durable revenue surplus, meaningful ARM liquidity | Distribution becomes viable. Buybacks may complement distribution. Governance decides the mix. |
+| Mature | Durable revenue surplus, meaningful ARM liquidity | Governance has more options for surplus deployment. Buybacks may complement distribution. Governance decides the mix. |
 
-These are guidelines, not constraints. Governance retains full discretion. The phases reflect the principle that value return mechanisms should match protocol maturity — premature buybacks or distributions divert capital from growth during the phase where capital compounds most aggressively.
+These are guidelines, not constraints. Governance retains full discretion. The phases reflect the principle that surplus deployment approaches should match protocol maturity — premature buybacks or distributions divert treasury resources from growth during the phase where those resources compound most aggressively.
 
 ### Wind-down (redemption)
 
