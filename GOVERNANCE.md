@@ -753,6 +753,64 @@ If governance submits a new loosening change while a previous one is still pendi
 | **Adapters** (CCTP, Aave, future) | Not upgradeable — additive registry | Governor maintains authorized adapter registry | New adapters are deployed as independent contracts and authorized via governance proposal. Old adapters can be deauthorized or set to withdraw-only. Each adapter is independently auditable. See §Adapter Registry. |
 | **Shielded pool** (Railgun) | No | — | Core privacy infrastructure. Immutable. |
 
+### Governance-critical upgrade lifecycle (future governor upgrade — not implemented at launch)
+
+**Implementation status: this section specifies a planned post-launch governor upgrade. It is NOT part of the initial deployment. The initial governor uses the standard Extended proposal path for all upgrades. This mechanism will be implemented via UUPS governor upgrade after the initial audit cycle.**
+
+Governor, timelock, and treasury contract upgrades are the highest-risk governance actions — a malicious governor upgrade can replace all other safety mechanisms. These upgrades will use a two-stage approval process that requires governance to decide twice, with a mandatory review period between decisions.
+
+**Scope:** Applies to UUPS upgrades targeting:
+- Governor contract
+- TimelockController (if upgradeable)
+- ArmadaTreasuryGov
+
+Fee module and revenue counter upgrades use the standard Extended proposal path. They are high-risk but cannot directly bypass governance itself.
+
+**Stage 1 — Upgrade Approval**
+
+An Extended governance proposal that approves an exact upgrade package. Stage 1 does not perform the upgrade. It records the approved package, defined by:
+- Target proxy address
+- New implementation address
+- Implementation code hash (keccak256 of deployed bytecode)
+- Initializer / migration calldata hash (if any)
+- Expiry timestamp (stage 2 must be ratified before this)
+
+The package hash binds all elements. If any element changes, a new stage 1 proposal is required.
+
+Stage 1 follows the standard Extended lifecycle: 48-hour proposal delay, 14-day voting period, 30% quorum. The Security Council may veto during the execution delay.
+
+**Mandatory Review Period**
+
+After stage 1 passes and executes (recording the approved package), a mandatory review period begins. Stage 2 cannot be proposed until this period expires.
+
+Review period: 14 days minimum. This is a fixed constant, not a governance parameter — governance cannot shorten it.
+
+During this period, the community inspects the exact implementation code at the approved address. The implementation is deployed and verifiable on-chain before stage 2 begins.
+
+**Stage 2 — Upgrade Ratification**
+
+A special-purpose ratification proposal that references the stage 1 package hash. Stage 2 can only execute the exact approved package — no modifications.
+
+Stage 2 follows the Extended lifecycle with its own independent vote: 48-hour proposal delay, 14-day voting period, 30% quorum, 7-day execution delay. The Security Council may veto.
+
+On successful execution, stage 2 performs the actual UUPS upgrade.
+
+**Invariants:**
+- Ratification cannot alter the upgrade payload
+- A new implementation address requires a new stage 1
+- Both stages are independently vetoable by the SC
+- If stage 2 is not ratified before the expiry timestamp, the approval lapses and a new stage 1 is required
+- If stage 2 fails (quorum not met or majority against), the approval is permanently cancelled
+
+**Minimum timeline:**
+
+Stage 1: 2-day delay + 14-day vote + 7-day execution = 23 days
+Review period: 14 days
+Stage 2: 2-day delay + 14-day vote + 7-day execution = 23 days
+Total: ~60 days minimum from first proposal to upgrade
+
+This is deliberately slow. Governance-critical upgrades should be the hardest action in the system to execute.
+
 ### Adapter Registry
 
 The governor maintains a registry of authorized adapter addresses. Adapters interact with the shielded pool and external protocols (Aave, CCTP, future yield sources, future relayer infrastructure).
@@ -798,3 +856,4 @@ The following mechanisms are candidates for governance upgrades as the protocol 
   override count. Related designs exist in liquid-democracy-style
   governance systems. This is a governor upgrade, not a token
   change.
+- **Two-stage governance-critical upgrades.** Governor, timelock, and treasury upgrades will require a two-stage approval + ratification process with mandatory 14-day review period between stages and payload-hash binding. The initial deployment uses the standard Extended proposal path. See §Governance-critical upgrade lifecycle. This is the highest-priority post-launch governor upgrade.
