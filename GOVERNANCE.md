@@ -161,6 +161,7 @@ loosens constraints, or increases risk exposure:
 * Quorum decreases
 * Voting period decreases
 * Execution delay decreases
+* Proposal delay decreases
 * Proposal threshold decreases
 * Bond decreases
 * Quorum floor decreases
@@ -175,6 +176,7 @@ constraints, or reduces risk exposure:
 * Quorum increases
 * Voting period increases
 * Execution delay increases
+* Proposal delay increases
 * Proposal threshold increases
 * Bond increases
 * Quorum floor increases
@@ -190,11 +192,7 @@ expand it. This mirrors the asymmetric activation delay on treasury
 outflow parameters (see §Treasury Outflow Limits) and extends the
 principle to the full proposal classification system.
 
-**Mixed-direction actions remain extended.** Security Council
-replacement (simultaneously revoking one council and installing
-another) and contract upgrades (replacing logic entirely) are
-classified as extended regardless of intent, because the loosening
-component dominates the risk profile.
+**Mixed-direction actions remain extended.** Any mixed-direction parameter change defaults to Extended. If a proposal both loosens and tightens different parts of the same parameter set (e.g., fee schedule reshuffles, outflow limit increase with window decrease, steward budget limit increase with window decrease), the loosening component dominates for classification. Security Council replacement (simultaneously revoking one council and installing another) and contract upgrades (replacing logic entirely) are classified as extended regardless of intent, for the same reason.
 
 **Classification mapping:**
 
@@ -205,6 +203,7 @@ component dominates the risk profile.
 | Quorum | Decrease | Increase |
 | Voting period | Decrease (less scrutiny time) | Increase (more scrutiny time) |
 | Execution delay | Decrease (less veto time) | Increase (more veto time) |
+| Proposal delay | Decrease (less visibility time) | Increase (more visibility time) |
 | Treasury Steward | Election | Removal |
 | Proposal threshold | Decrease (easier to propose) | Increase (harder to propose) |
 | Bond | Decrease (cheaper to propose) | Increase (more expensive to propose) |
@@ -286,8 +285,8 @@ All reusable governance parameters listed above are themselves governable — lo
 | **Parameters** | Activity shaping defaults (transaction size constraints, rate limits, recommended ranges) | Extended |
 | **Parameters** | Ingress normalization (standard ingress amounts, phase, custom deposit availability) | Extended |
 | **Parameters** | Wind-down threshold, wind-down deadline | Standard |
-| **Parameters** | Governance parameters — loosening changes (quorum decrease, voting period decrease, execution delay decrease, proposal threshold decrease, bond decrease, quorum floor decrease) | Extended |
-| **Parameters** | Governance parameters — tightening changes (quorum increase, voting period increase, execution delay increase, proposal threshold increase, bond increase, quorum floor increase) | Standard |
+| **Parameters** | Governance parameters — loosening changes (quorum decrease, voting period decrease, execution delay decrease, proposal delay decrease, proposal threshold decrease, bond decrease, quorum floor decrease) | Extended |
+| **Parameters** | Governance parameters — tightening changes (quorum increase, voting period increase, execution delay increase, proposal delay increase, proposal threshold increase, bond increase, quorum floor increase) | Standard |
 | **Parameters** | Treasury outflow rate limit increases or window extensions (loosening) | Extended |
 | **Parameters** | Treasury outflow rate limit decreases or window reductions (tightening) | Standard |
 | **Steward** | Treasury Steward election | Extended |
