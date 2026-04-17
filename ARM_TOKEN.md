@@ -70,7 +70,7 @@ The constructor also sets name, symbol, and stores the immutable configuration: 
 
 A single shared revenue-lock contract holds all early network ARM (2,400,000 total). The contract tracks per-beneficiary allocations internally:
 
-- **Beneficiary list** is set at deployment: each team member, each airdrop recipient, and the Knowable Safe (which holds the portion reserved for future contributors) are all entries in the same list with their respective amounts.
+- **Beneficiary list** is set at deployment: each recipient and the Knowable Safe (which holds the portion reserved for future contributors) are all entries in the same list with their respective amounts.
 - **Release logic** is identical for all beneficiaries: as revenue milestones are reached, each beneficiary can call `release(delegatee)` to withdraw their unlocked percentage. ARM is transferred and delegated atomically.
 - **The Knowable Safe** appears in the beneficiary list like any other team member — it simply has a larger allocation. Future contributor allocations are handled through off-chain agreements between Knowable and contributors; once ARM is released to the Safe's wallet (per the milestone schedule), Knowable distributes to contributors through standard ARM transfers (available once governance enables global transfers).
 - **One whitelist entry** in the ARM token constructor for this lock contract. No per-recipient whitelisting needed.
@@ -217,8 +217,7 @@ Anyone can call `syncObservedRevenue()` to advance the ratchet without claiming.
 | Allocation | Revenue-gated? | Global transfer restriction applies? | Can delegate/vote while restricted? | Transfer requires |
 |---|---|---|---|---|
 | Crowdfund | No | Yes | Yes (once claimed + delegated) | Global transfer unlock only |
-| Team | Yes | Yes | Yes (proportional to revenue unlock) | Revenue milestone AND global transfer unlock |
-| Airdrop | Yes | Yes | Yes (proportional to revenue unlock) | Revenue milestone AND global transfer unlock |
+| Early network | Yes | Yes | Yes (proportional to revenue unlock) | Revenue milestone AND global transfer unlock |
 | Treasury | No | Whitelisted (can transfer at any time) | No voting power | Transfers require governance proposal (standard or steward channel). The token contract does not enforce this — the treasury is whitelisted for transfers, and governance controls outflows via proposal execution through the timelock. See GOVERNANCE.md §Treasury Outflow Limits. |
 
 ---

@@ -2,7 +2,7 @@
 
 Ingress normalization channels public deposits into a small set of standard transfer amounts to reduce amount-based correlation. It is one lever in Armada's [Activity Shaping](ACTIVITY_SHAPING.md) toolkit, implemented at the integrator/application layer.
 
-This document specifies ingress normalization for Borderless (the reference application). Other integrators may adopt, adapt, or ignore these policies.
+This document specifies ingress normalization for the Armada front-end (the reference application). Other integrators may adopt, adapt, or ignore these policies.
 
 ## Problem
 
@@ -28,9 +28,9 @@ This mechanism does not:
 ## Design Principles
 
 1. **Protocol neutrality.** The base protocol continues to support arbitrary amounts. Ingress normalization is not a protocol concern.
-2. **Public ingress coordination.** Borderless shapes the publicly visible deposit amount, since that is where amount uniqueness is exposed. Shielded balances remain arbitrary.
+2. **Public ingress coordination.** The Armada front-end shapes the publicly visible deposit amount, since that is where amount uniqueness is exposed. Shielded balances remain arbitrary.
 3. **Small number of bands.** Fewer bands means denser sets. Too many bands fragments the crowd and defeats the purpose.
-4. **Single public ingress event.** Borderless prefers one public deposit at one standard amount. Public multi-deposit synthesis is discouraged.
+4. **Single public ingress event.** The Armada front-end prefers one public deposit at one standard amount. Public multi-deposit synthesis is discouraged.
 5. **Bootstrap-first logic.** Early on, stronger coordination matters more than optionality.
 6. **Relax over time.** As crowd density improves, hard banding can evolve into softer recommendations.
 
@@ -38,7 +38,7 @@ This mechanism does not:
 
 ### Core rule
 
-During Bootstrap, Borderless accepts deposits only at standard ingress amounts and prefers a single public deposit event. Public multi-deposit synthesis is not the default path and should be avoided because it creates a secondary observable pattern.
+During Bootstrap, the Armada front-end accepts deposits only at standard ingress amounts and prefers a single public deposit event. Public multi-deposit synthesis is not the default path and should be avoided because it creates a secondary observable pattern.
 
 The user selects a standard public deposit amount. Approximating arbitrary targets through multiple public deposits is discouraged during Bootstrap.
 
@@ -58,7 +58,7 @@ The third amount is the biggest unresolved design choice. Candidates:
 
 | Option | Argument for | Argument against |
 |--------|-------------|-----------------|
-| 5,000 USDC | Lower ceiling forces more concentration into 1,000 band; matches Borderless's payment focus | May be too low for treasury operations; pushes larger depositors to other integrators or multiple deposits |
+| 5,000 USDC | Lower ceiling forces more concentration into 1,000 band; matches the Armada front-end's payment focus | May be too low for treasury operations; pushes larger depositors to other integrators or multiple deposits |
 | 10,000 USDC | Covers treasury use cases; cleaner logarithmic spacing | Wider spread may thin out the middle range; large deposits may remain sparse regardless |
 
 A fourth mid-range amount (eg. 2,500) has been considered and deferred. Adding it cuts expected density per band by ~25% at the same volume. It is easier to add a band later than to remove one.
@@ -71,7 +71,7 @@ Allowing arbitrary public deposit amounts during bootstrap weakens one of the fe
 
 ### Why no public multi-deposit synthesis in Bootstrap
 
-If a user wants 2,300 USDC, Borderless should not default to publicly sending 2×1,000 + 3×100. Multi-deposit sequences create a secondary observable pattern — the combination itself can fingerprint the depositor, especially when:
+If a user wants 2,300 USDC, the Armada front-end should not default to publicly sending 2×1,000 + 3×100. Multi-deposit sequences create a secondary observable pattern — the combination itself can fingerprint the depositor, especially when:
 
 - The combination is unusual
 - The same user repeats the same combination
@@ -83,7 +83,7 @@ A user wanting an amount not covered by a single standard amount should deposit 
 
 | Phase | Behavior | Trigger |
 |-------|----------|---------|
-| Bootstrap | Hard normalization — Borderless only accepts deposits at standard amounts; single deposit per ingress event | Launch through early growth |
+| Bootstrap | Hard normalization — the Armada front-end only accepts deposits at standard amounts; single deposit per ingress event | Launch through early growth |
 | Growth | Semi-hard — standard amounts presented as defaults; custom available behind advanced settings with clear privacy warning | Governance decision based on pool density metrics |
 | Mature | Adaptive — SDK recommends amounts with strongest current cover; custom always available | Sufficient organic flow density |
 
@@ -138,7 +138,7 @@ Something like: "Select a deposit amount. Standard amounts blend with other depo
 
 Instead of: "Custom public deposit amounts are disabled"
 
-Something like: "Borderless currently uses common deposit sizes to strengthen early crowd cover. Custom amounts will be available in a future phase."
+Something like: "The Armada front-end currently uses common deposit sizes to strengthen early crowd cover. Custom amounts will be available in a future phase."
 
 ## Governance Interface
 
@@ -150,11 +150,11 @@ Governance controls for reference infrastructure:
 | Phase | Current ingress normalization phase (Bootstrap / Growth / Mature) |
 | Custom deposit availability | Whether custom amounts are available and under what conditions |
 
-These parameters apply to governance-controlled reference infrastructure (Borderless, default relayer configuration). Integrators set their own policies independently.
+These parameters apply to governance-controlled reference infrastructure (the Armada front-end, default relayer configuration). Integrators set their own policies independently.
 
 ## Metrics and Monitoring
 
-Borderless should track:
+The Armada front-end should track:
 
 - Deposit count per ingress band
 - Share of total deposits by band
@@ -193,5 +193,5 @@ Borderless should track:
 1. **Bootstrap band set.** Three amounts or four? Which ones? The third amount (5,000 vs 10,000) is the biggest unresolved choice, dependent on expected early integrator profiles and use cases.
 2. **Adversary information surface.** Can pool-relative context (eg. "1,000 USDC deposits are common right now") be shown to users without giving adversaries a free timing/amount correlation tool? May need to restrict to qualitative indicators.
 3. **Phase transition criteria.** What anonymity set density within standard bands is "enough" to relax into Growth phase? This needs a concrete metric, not a vibes check.
-4. **Integrator divergence.** Should specific integrators be encouraged to maintain stricter ingress normalization even after Borderless relaxes? Divergent policies across integrators could either strengthen the system (different integrators serve different risk profiles) or fragment it (users cluster by integrator policy, creating sub-pools).
+4. **Integrator divergence.** Should specific integrators be encouraged to maintain stricter ingress normalization even after the Armada front-end relaxes? Divergent policies across integrators could either strengthen the system (different integrators serve different risk profiles) or fragment it (users cluster by integrator policy, creating sub-pools).
 5. **Yield dwell-time profiles.** Yield-oriented deposits contribute to band density (stated above), but their dwell-time profiles may differ significantly from payment users. If yield deposits dominate a band and have long dwell times while payment deposits are short-lived, the effective anonymity set for short-dwell payment users may be thinner than the raw band count suggests. Worth monitoring but may not require different treatment.
