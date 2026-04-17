@@ -200,7 +200,7 @@ component dominates the risk profile.
 | Treasury Steward | Election | Removal |
 | Whitelist addition | Always extended | — (no removal path) |
 | Contract upgrade | Always extended | — |
-| SC replacement | Always extended | — |
+| Security Council replacement | Always extended | — |
 | Revenue definition expansion | Always extended | — |
 
 Classification is determined mechanically by calldata and, where
@@ -219,7 +219,7 @@ changes between creation and execution.
 If any action in a batched proposal is classified as extended, the
 entire proposal is extended.
 
-**Note: veto ratification votes** (see §Security Council) are a fourth proposal category with distinct parameters — they are triggered automatically when the SC vetoes a queued proposal, have a fixed 7-day voting period, use standard quorum, and carry the unique side effect of SC ejection on AGAINST outcome. The governor contract must implement this as a separate proposal type alongside standard, extended, and signaling.
+**Note: veto ratification votes** (see §Security Council) are a fourth proposal category with distinct parameters — they are triggered automatically when the Security Council vetoes a queued proposal, have a fixed 7-day voting period, use standard quorum, and carry the unique side effect of Security Council ejection on AGAINST outcome. The governor contract must implement this as a separate proposal type alongside standard, extended, and signaling.
 
 ### Signaling proposals
 
@@ -235,7 +235,7 @@ A signaling proposal is a non-executable proposal used to measure token-holder p
 - **Gate: proposal threshold only.** Pre-transfer-unlock: 5,000 ARM threshold, no bond (same as all proposals). Post-transfer-unlock: 5,000 ARM threshold, **no bond** — signaling proposals consume discourse, not operational attention or assets. Spam defense is the proposal threshold (5,000 ARM) and the 48h pending delay. If signaling spam becomes a problem, governance can introduce a per-proposer cooldown or signaling-specific bond via governor upgrade.
 - Voting works identically: FOR / AGAINST / ABSTAIN, quorum check, vote changing during the voting period.
 - **No QUEUED or EXECUTED state.** After the voting period ends, the proposal resolves to SUCCEEDED or DEFEATED based on quorum and majority. No timelock queue, no execution transaction.
-- SC veto does not apply — there is nothing queued to veto.
+- Security Council veto does not apply — there is nothing queued to veto.
 - Signaling proposals do not count toward the steward circuit breaker's consecutive-low-participation tracker — they are not steward proposals.
 
 ---
@@ -277,7 +277,7 @@ All reusable governance parameters listed above are themselves governable via ex
 | **Parameters** | Treasury outflow rate limits (floors and percentages) | Extended |
 | **Steward** | Treasury Steward election / removal | Extended |
 | **Steward** | Steward budget table (add/remove tokens, change limits/windows) | Extended |
-| **Security Council** | SC address replacement via governance | Extended |
+| **Security Council** | Security Council address replacement via governance | Extended |
 | **Adapters** | Authorize new adapters, deauthorize old adapters | Standard |
 | **Upgrades** | Governor contract upgrade (UUPS, governance-gated) | Extended |
 | **Upgrades** | Fee module upgrade (UUPS, governance-gated) | Extended |
@@ -385,7 +385,7 @@ Additional steward-like roles (e.g. a Protocol Steward for integrator and relaye
 
 | Power | Mechanism | Constraint |
 |---|---|---|
-| **Pause new shields** | On-chain pause flag on the shielded pool | Auto-expires after 24 hours. SC can re-invoke but each invocation is a visible on-chain event. Unshields are never pauseable — users can always exit. |
+| **Pause new shields** | On-chain pause flag on the shielded pool | Auto-expires after 24 hours. Security Council can re-invoke but each invocation is a visible on-chain event. Unshields are never pauseable — users can always exit. |
 | **Veto queued proposal** | Cancel a passed proposal during its execution delay, before it executes | See §Veto Mechanism below. |
 | **Crowdfund cancel** | Emergency cancel of the crowdfund pre-finalization | Pre-protocol-launch only. See CROWDFUND.md §cancel(). No ratification required. |
 
@@ -405,14 +405,14 @@ The Security Council cannot:
 When the Security Council vetoes a queued proposal:
 
 1. **Proposal passes** with quorum during normal voting.
-2. **SC vetoes** during the execution delay window. The proposal is cancelled. SC must publish a written rationale (off-chain, with on-chain hash for verifiability).
+2. **Security Council vetoes** during the execution delay window. The proposal is cancelled. Security Council must publish a written rationale (off-chain, with on-chain hash for verifiability).
 3. **A 7-day veto ratification vote begins automatically.** The question: "Uphold the Security Council's veto?"
-   - **FOR (uphold veto):** The vetoed proposal is permanently cancelled. The SC acted correctly in the community's view.
+   - **FOR (uphold veto):** The vetoed proposal is permanently cancelled. The Security Council acted correctly in the community's view.
    - **AGAINST (deny veto):** The original vetoed proposal is
      restored. The current Security Council multisig is ejected
      — its address is removed from the governor contract.
-     Governance must elect a new SC via extended proposal. During
-     the gap, no SC powers are available (no pause, no veto).
+     Governance must elect a new Security Council via extended proposal. During
+     the gap, no Security Council powers are available (no pause, no veto).
 
      The proposal is re-scheduled in the timelock with a fresh
      2-day delay (the timelock's minimum). Execution remains a
@@ -422,7 +422,7 @@ When the Security Council vetoes a queued proposal:
    - **Quorum not met:** Veto stands by default. If the community can't mobilize to override, the SC's security judgment holds.
 4. Ratification uses **standard quorum** (20% of circulating voting power or 100,000 ARM).
 
-**The ejection consequence is the accountability mechanism.** The SC only vetoes when they're genuinely confident the community will back them — vetoing a proposal the community wanted means losing the seat. This replaces the need for a separate SC bond or punishment mechanism.
+**The ejection consequence is the accountability mechanism.** The Security Ccouncil only vetoes when they're genuinely confident the community will back them — vetoing a proposal the community wanted means losing the seat. This replaces the need for a separate Security Council bond or punishment mechanism.
 
 **Single-veto rule.** A restored proposal cannot be vetoed again.
 This is enforced per-proposal — the governor sets a flag when a
@@ -439,17 +439,17 @@ Core team (2), external security (2), community (1).
 
 ### Membership changes
 
-**Routine rotation:** The SC manages its own signer composition via standard Gnosis Safe signer replacement. This keeps routine rotation off the governance proposal queue.
+**Routine rotation:** The Security Council manages its own signer composition via standard Gnosis Safe signer replacement. This keeps routine rotation off the governance proposal queue.
 
-**Governance override:** Governance can replace the SC multisig address via extended proposal (`setSecurityCouncil(newAddress)` on the governor contract). This is the path used after an ejection or if the community loses confidence in the SC.
+**Governance override:** Governance can replace the Security Council multisig address via extended proposal (`setSecurityCouncil(newAddress)` on the governor contract). This is the path used after an ejection or if the community loses confidence in the SC.
 
-**Ejection (via denied veto):** The governor contract automatically removes the SC address when a veto ratification vote fails (majority AGAINST). The `setSecurityCouncil` slot is set to `address(0)`. During the gap, no SC powers are available (no pause, no veto). Anyone can submit an extended proposal nominating a new SC multisig address — the normal extended proposal path applies (48-hour delay, 14-day vote, 7-day execution delay). Governance should treat SC replacement as the highest priority during this window.
+**Ejection (via denied veto):** The governor contract automatically removes the Security Council address when a veto ratification vote fails (majority AGAINST). The `setSecurityCouncil` slot is set to `address(0)`. During the gap, no Security Council powers are available (no pause, no veto). Anyone can submit an extended proposal nominating a new Security Council multisig address — the normal extended proposal path applies (48-hour delay, 14-day vote, 7-day execution delay). Governance should treat Security Council replacement as the highest priority during this window.
 
 ### Limitations
 
-- All SC actions except crowdfund cancel require retroactive ratification or produce automatic ratification votes (veto path)
+- All Security Council actions except crowdfund cancel require retroactive ratification or produce automatic ratification votes (veto path)
 - Shield pauses auto-expire after 24h — if not renewed, the pause lifts automatically
-- The SC has no spending authority, no parameter authority, and no upgrade authority
+- The Security Council has no spending authority, no parameter authority, and no upgrade authority
 
 ⚠️ Security Council membership must be confirmed and multisig deployed before the crowdfund opens.
 
@@ -651,7 +651,7 @@ Those who paid for tokens have priority in failure scenarios. Locked tokens only
 
 ### Post-wind-down
 
-**Governance is permanently disabled.** No new proposals. The governor contract stops accepting submissions. The steward role is void. The Security Council retains a single non-renewable 24h pause authority only — it can invoke one pause on the shielded pool (in case an adapter issue affects user withdrawals), but the pause auto-expires after 24h and cannot be renewed post-wind-down. **Enforcement:** as part of `triggerWindDown()`, the wind-down contract sets a `windDownActive` flag on the pause contract. The pause mechanism checks: if `windDownActive && pauseAlreadyInvoked`, revert. This prevents the SC from indefinitely pausing the pool without accountability, since the normal ratification mechanism depends on governance being active.
+**Governance is permanently disabled.** No new proposals. The governor contract stops accepting submissions. The steward role is void. The Security Council retains a single non-renewable 24h pause authority only — it can invoke one pause on the shielded pool (in case an adapter issue affects user withdrawals), but the pause auto-expires after 24h and cannot be renewed post-wind-down. **Enforcement:** as part of `triggerWindDown()`, the wind-down contract sets a `windDownActive` flag on the pause contract. The pause mechanism checks: if `windDownActive && pauseAlreadyInvoked`, revert. This prevents the Security Council from indefinitely pausing the pool without accountability, since the normal ratification mechanism depends on governance being active.
 
 All remaining actions are permissionless:
 - ARM holders redeem via the redemption contract (no deadline)
@@ -754,7 +754,7 @@ Token governance represents ARM holders. But Armada's value comes primarily from
 
 ### Governance reality
 
-**At launch, governance security depends on the integrity of the top delegates, not on token distribution.** Power concentrates in 3-5 early delegates. Governance is slow (7-14 day cycles). Protection comes from outflow limits and visibility windows, not from voting mechanics. The system is designed to degrade predictably (bounded leakage, slow degradation) rather than catastrophically (full drain, permanent capture). This is intentional — the outflow limits and SC veto are the real safety rails, and governance voting is the steering mechanism within those rails.
+**At launch, governance security depends on the integrity of the top delegates, not on token distribution.** Power concentrates in 3-5 early delegates. Governance is slow (7-14 day cycles). Protection comes from outflow limits and visibility windows, not from voting mechanics. The system is designed to degrade predictably (bounded leakage, slow degradation) rather than catastrophically (full drain, permanent capture). This is intentional — the outflow limits and Security Council veto are the real safety rails, and governance voting is the steering mechanism within those rails.
 
 ### Future governance upgrades (governor is UUPS-upgradeable)
 
