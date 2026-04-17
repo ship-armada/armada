@@ -37,7 +37,7 @@ ARM is minted to an initial bootstrap holder (the deployer address — **require
 |---|---|---|---|
 | Crowdfund contract | 1,800,000 (MAX_SALE) | Crowdfund contract address | Always 1.8M regardless of elastic expansion. Verified by `loadArm()`. |
 | Treasury | 7,800,000 | Treasury address (governance-controlled) | |
-| Team + Airdrop | 2,400,000 | Shared revenue-lock contract | See Revenue-lock architecture below. |
+| Early network | 2,400,000 | Shared revenue-lock contract | See Revenue-lock architecture below. |
 
 The protocol is not considered live until deployment verification confirms all four conditions:
 
@@ -68,7 +68,7 @@ The constructor also sets name, symbol, and stores the immutable configuration: 
 
 ### Revenue-lock contract architecture
 
-A single shared revenue-lock contract holds all team and airdrop ARM (2,400,000 total). The contract tracks per-beneficiary allocations internally:
+A single shared revenue-lock contract holds all early network ARM (2,400,000 total). The contract tracks per-beneficiary allocations internally:
 
 - **Beneficiary list** is set at deployment: each team member, each airdrop recipient, and the Knowable Safe (which holds the portion reserved for future contributors) are all entries in the same list with their respective amounts.
 - **Release logic** is identical for all beneficiaries: as revenue milestones are reached, each beneficiary can call `release(delegatee)` to withdraw their unlocked percentage. ARM is transferred and delegated atomically.
@@ -132,7 +132,7 @@ These addresses can send ARM even while transfers are globally restricted. **The
 |---|---|---|
 | Crowdfund contract | Must distribute ARM to claimants via `claim()` and `delegateOnBehalf()` | Constructor parameter |
 | Treasury | Must send ARM via governance proposals while restricted | Constructor parameter |
-| Revenue-lock contract | Must release team/airdrop ARM to beneficiaries as milestones are reached | Constructor parameter |
+| Revenue-lock contract | Must release early network ARM to beneficiaries as milestones are reached | Constructor parameter |
 
 **Post-deployment additions (governance-gated):**
 
@@ -175,11 +175,11 @@ No other address can call this function. These addresses are constructor paramet
 ### What RESTRICTED means for holders
 
 - Crowdfund participants who `claim()` receive ARM in their wallet. They can delegate and vote. They cannot transfer or sell until governance unlocks transfers.
-- Team and airdrop recipients' ARM is held in the shared revenue-lock contract. Their ARM is additionally subject to revenue-gated unlock (§5.1). Even after revenue unlock, transfers remain restricted globally until governance acts.
+- Early network recipients' ARM is held in the shared revenue-lock contract. Their ARM is additionally subject to revenue-gated unlock (§5.1). Even after revenue unlock, transfers remain restricted globally until governance acts.
 
-### 5.1 Revenue-Gated Locks (Team + Airdrop only)
+### 5.1 Revenue-Gated Locks (Early Network only)
 
-Team and airdrop ARM has a second restriction layer independent of the global transfer restriction. These tokens unlock based on cumulative protocol revenue:
+Early network ARM has a second restriction layer independent of the global transfer restriction. These tokens unlock based on cumulative protocol revenue:
 
 | Cumulative Revenue | Unlocked % | Voting Power % |
 |---|---|---|
@@ -193,7 +193,7 @@ Team and airdrop ARM has a second restriction layer independent of the global tr
 
 **Revenue-gated unlock mechanism**
 
-RevenueLock releases team and airdrop ARM allocations according to the milestone schedule above, tied to cumulative protocol revenue. Revenue is read from RevenueCounter, a UUPS-upgradeable contract. RevenueLock enforces a monotonic, rate-limited view of observed revenue. Two properties hold regardless of RevenueCounter implementation:
+RevenueLock releases early network ARM allocations according to the milestone schedule above, tied to cumulative protocol revenue. Revenue is read from RevenueCounter, a UUPS-upgradeable contract. RevenueLock enforces a monotonic, rate-limited view of observed revenue. Two properties hold regardless of RevenueCounter implementation:
 
 1. **No rewind.** Once a revenue level has been observed and recorded in `maxObservedRevenue`, it cannot be reduced by subsequent RevenueCounter upgrades. Unlocked allocations remain unlocked. Beneficiaries who have not yet claimed are never retroactively frozen.
 
@@ -208,8 +208,8 @@ Anyone can call `syncObservedRevenue()` to advance the ratchet without claiming.
 **Key properties:**
 - Revenue milestones cannot be changed by governance. The schedule is immutable.
 - Revenue measurement source: `RevenueCounter` (UUPS proxy) — read via `maxObservedRevenue` ratchet, not directly. The ratchet is monotonic and rate-limited.
-- Team/airdrop tokens gain voting power proportionally as they unlock — at $0 revenue, team and airdrop ARM has zero voting power regardless of delegation.
-- Governance cannot instantly accelerate team/airdrop unlocks. Acceleration via malicious RevenueCounter upgrade is rate-limited to `MAX_REVENUE_INCREASE_PER_DAY`.
+- Early network tokens gain voting power proportionally as they unlock — at $0 revenue, early network ARM has zero voting power regardless of delegation.
+- Governance cannot instantly accelerate early network unlocks. Acceleration via malicious RevenueCounter upgrade is rate-limited to `MAX_REVENUE_INCREASE_PER_DAY`.
 - These restrictions are independent of the global transfer gate. A team member whose ARM is 50% revenue-unlocked still cannot transfer until governance enables global transfers.
 
 ### 5.2 Transfer restriction summary by allocation
@@ -254,7 +254,7 @@ function delegateOnBehalf(address account, address delegatee) external
 
 **Crowdfund usage:** The crowdfund contract calls `ARM.transfer(participant, amount)` followed by `ARM.delegateOnBehalf(participant, delegatee)` within the same `claim()` transaction.
 
-**Revenue-lock usage:** The revenue-lock contract calls `ARM.transfer(beneficiary, releasedAmount)` followed by `ARM.delegateOnBehalf(beneficiary, delegatee)` within the same `release(delegatee)` transaction. This ensures team/airdrop ARM is delegated immediately upon release, matching the crowdfund claim pattern. Both launch circulation paths (crowdfund claim + revenue-lock release) produce atomically delegated ARM. Treasury distributions follow a separate path without atomic delegation — see GOVERNANCE.md §Delegation-at-circulation requirement.
+**Revenue-lock usage:** The revenue-lock contract calls `ARM.transfer(beneficiary, releasedAmount)` followed by `ARM.delegateOnBehalf(beneficiary, delegatee)` within the same `release(delegatee)` transaction. This ensures early network ARM is delegated immediately upon release, matching the crowdfund claim pattern. Both launch circulation paths (crowdfund claim + revenue-lock release) produce atomically delegated ARM. Treasury distributions follow a separate path without atomic delegation — see GOVERNANCE.md §Delegation-at-circulation requirement.
 
 **Why this approach:** The alternative (requiring recipients to delegate in a separate transaction) creates a window of undelegated supply after each claim or release. For the launch circulation paths (crowdfund claim + revenue-lock release), atomic delegation ensures ARM enters governance immediately. Treasury distributions follow a different path and may create undelegated ARM until recipients delegate manually — see GOVERNANCE.md §Delegation-at-circulation requirement for the full picture. The access control is narrow: only two contracts, both set immutably at deployment, can call this function. Auditors should verify the access control cannot be changed.
 
@@ -267,8 +267,8 @@ The following ARM has zero voting power under all circumstances:
 | Unclaimed crowdfund ARM (still in crowdfund contract) | Not yet distributed to a holder | Crowdfund contract has no `delegate()` call path for its own balance. ARM physically in the contract cannot be delegated. |
 | Undelegated ARM (held but no `delegate()` called) | Delegation is required to activate voting power | Standard ERC20Votes behavior — undelegated balance has zero voting units. |
 | Treasury ARM | Governance-controlled, does not vote | **Token-enforced:** `delegate()` reverts when called by the treasury address. Hardcoded in ARM token contract. Not process discipline — the token physically prevents the treasury from delegating. |
-| Unreleased team/airdrop ARM (in revenue-lock contract) | Revenue milestone not yet reached | **Architectural:** ARM sits in the lock contract which has no standalone `delegate()` call path. Unreleased ARM cannot be delegated. |
-| Released team/airdrop ARM (in recipient's personal wallet) | Revenue milestone reached; ARM released | Delegated atomically at release via `release(delegatee)` → `delegateOnBehalf()`. Immediately active in governance. |
+| Unreleased early network ARM (in revenue-lock contract) | Revenue milestone not yet reached | **Architectural:** ARM sits in the lock contract which has no standalone `delegate()` call path. Unreleased ARM cannot be delegated. |
+| Released early network ARM (in recipient's personal wallet) | Revenue milestone reached; ARM released | Delegated atomically at release via `release(delegatee)` → `delegateOnBehalf()`. Immediately active in governance. |
 
 ### 6.2 Voting Enforcement Architecture
 
@@ -276,10 +276,10 @@ Standard OZ `ERC20Votes` is sufficient for the core checkpointing. The voting re
 
 **Treasury non-voting:** The ARM token contract hardcodes the treasury address (constructor parameter). Any call to `delegate()` from the treasury address reverts. This is a single-line check in the `delegate()` override, not a custom voting-unit calculation. The treasury can still transfer ARM (it's whitelisted) — it just cannot convert its balance into voting power.
 
-**Revenue-gated team/airdrop voting:** A single shared revenue-lock contract holds all team and airdrop ARM. As revenue milestones are reached, beneficiaries call `release(delegatee)` to withdraw their unlocked percentage to their personal wallet. The lock contract atomically transfers ARM and calls `delegateOnBehalf(beneficiary, delegatee)` — mirroring the crowdfund `claim(delegate)` pattern. All released ARM enters circulation delegated. The lock contract itself has no standalone `delegate()` call path — unreleased ARM remains structurally vote-inert.
+**Revenue-gated early network voting:** A single shared revenue-lock contract holds all early network ARM. As revenue milestones are reached, beneficiaries call `release(delegatee)` to withdraw their unlocked percentage to their personal wallet. The lock contract atomically transfers ARM and calls `delegateOnBehalf(beneficiary, delegatee)` — mirroring the crowdfund `claim(delegate)` pattern. All released ARM enters circulation delegated. The lock contract itself has no standalone `delegate()` call path — unreleased ARM remains structurally vote-inert.
 
 This means:
-- At $0 revenue: all team/airdrop ARM sits in lock contracts → zero voting power
+- At $0 revenue: all early network ARM sits in lock contracts → zero voting power
 - At 25% unlock ($50k revenue): 25% released to personal wallets → 25% delegatable
 - At 100% unlock ($1M revenue): all ARM in personal wallets → full delegation possible
 
@@ -406,7 +406,7 @@ These must hold at all times. Auditors should verify each.
 | **`delegateOnBehalf` access is immutable** | Only the crowdfund contract and the revenue-lock contract (both set immutably in constructor) can call `delegateOnBehalf()`. No function can change this. |
 | **Proposal bonds inactive pre-transfer-unlock** | Governance operates on proposal threshold only (5,000 delegated ARM) while transfers are restricted. Bond mechanism activates post-transfer-unlock. |
 | **Revenue schedule is immutable** | The revenue milestone table cannot be changed by governance or any admin. |
-| **Revenue-lock contracts cannot delegate** | Lock contracts have no code path that calls `delegate()` on the ARM token. Unreleased team/airdrop ARM is structurally vote-inert. |
+| **Revenue-lock contracts cannot delegate** | Lock contracts have no code path that calls `delegate()` on the ARM token. Unreleased early network ARM is structurally vote-inert. |
 | **Delegation is required for voting** | Undelegated ARM has exactly zero voting power, regardless of balance. |
 | **Treasury ARM does not vote** | ARM held by the treasury address has no voting power. `delegate()` called by the treasury address reverts — this is token-enforced, not process discipline. |
 | **Token rights are uniform by allocation** | After claim and once any applicable restrictions are lifted, 1 ARM from the crowdfund is identical to 1 ARM from team allocation. No source-based discrimination in contract behavior. |
@@ -456,7 +456,7 @@ ARM Token Contract
   │     ├── calls setTransferable(true) via proposal execution
   │     └── wind-down trigger calls setTransferable(true) as side effect
   ├── consumed by: Revenue-Lock Contract (single shared contract)
-  │     ├── holds all team + airdrop ARM (2.4M)
+  │     ├── holds all early network ARM (2.4M)
   │     ├── tracks per-beneficiary allocations internally
   │     ├── release(delegatee) calls transfer + delegateOnBehalf
   │     └── releases proportional to governance-attested revenue counter

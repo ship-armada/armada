@@ -89,12 +89,12 @@ The ARM token's architectural enforcement (delegation-at-circulation for all pri
 
 **Included:**
 - All claimed crowdfund tokens (delegated atomically at claim)
-- Team and airdrop tokens that have cleared their revenue milestone and been released (delegated atomically at release)
+- Early network tokens that have cleared their revenue milestone and been released (delegated atomically at release)
 - Any ARM distributed from treasury (regardless of whether the recipient has delegated — treasury transfers do not enforce atomic delegation)
 
 **Not included:**
 - Treasury ARM (excluded from denominator; `delegate()` reverts for treasury address)
-- Revenue-locked team/airdrop tokens not yet unlocked
+- Revenue-locked early network tokens not yet unlocked
 - Allocated-but-unclaimed crowdfund tokens (vote-inert until claimed)
 
 Both the numerator (votes cast) and the denominator (circulating voting power) are snapshotted at proposal creation. A batch of revenue-milestone unlocks mid-vote cannot move the goalposts.
@@ -481,12 +481,12 @@ Summary (non-authoritative — `ARM_TOKEN.md` takes precedence):
 | Allocation | % | Enforcement | Voting power |
 |---|---|---|---|
 | Crowdfund | 10–15% | Non-transferable until governance unlock; lazy settlement (aggregate finalization, per-user computation at claim time — see CROWDFUND.md) | Active once claimed and delegated |
-| Early network (team + airdrop) | 20% | Single shared revenue-lock contract. 15% launch team (per-beneficiary allocations; Knowable Safe is a beneficiary like any other team member) + 5% ecosystem airdrop. All subject to revenue-gated unlock. | Proportional to revenue-unlock % |
+| Early network | 20% | Single shared revenue-lock contract with per-beneficiary allocations. Covers launch team, ecosystem contributors, and reserve for future contributors. All subject to revenue-gated unlock. | Proportional to revenue-unlock % |
 | Treasury | 65–70% | Governance-controlled; whitelisted for transfers | None — `delegate()` reverts for treasury address |
 
 ### Revenue-Gated Unlocks
 
-Team and airdrop tokens unlock based on cumulative protocol fee revenue.
+Early network tokens unlock based on cumulative protocol fee revenue.
 
 | Cumulative Revenue | % Unlocked |
 |----|---|
@@ -657,11 +657,11 @@ Pro-rata to all **circulating** ARM holders on **non-ARM treasury assets only**.
 
 **Circulating (can redeem):**
 - Crowdfund tokens (claimed)
-- Released team/airdrop tokens (released from revenue-lock contract)
+- Released early network tokens (released from revenue-lock contract)
 - Any ARM previously distributed from treasury
 
 **Cannot redeem:**
-- Revenue-locked team/airdrop tokens not yet released (still in the lock contract — the lock contract cannot call the redemption contract)
+- Revenue-locked early network tokens not yet released (still in the lock contract — the lock contract cannot call the redemption contract)
 - Treasury ARM (locked permanently)
 
 Those who paid for tokens have priority in failure scenarios. Locked tokens only unlock if protocol earns revenue — if the protocol failed before earning revenue, those tokens stay locked and cannot participate in redemption.
