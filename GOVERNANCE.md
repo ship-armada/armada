@@ -759,7 +759,7 @@ The governor maintains a registry of authorized adapter addresses. Adapters inte
 
 **Adding a new adapter:** Deploy the adapter contract independently. Submit a standard governance proposal to authorize it (`authorizeAdapter(address)`). Once authorized, the adapter can interact with the protocol. Existing adapters remain active — new additions are additive, not replacements.
 
-**Removing an adapter:** Governance proposal to deauthorize (`deauthorizeAdapter(address)`). For adapters with user positions (e.g., yield adapter with deposits), deauthorization should set the adapter to **withdraw-only mode** rather than immediate full deauthorization — users need time to exit their positions.
+**Removing an adapter:** submit a standard governance proposal to deauthorize (`deauthorizeAdapter(address)`). For adapters with user positions (e.g., yield adapter with deposits), deauthorization should set the adapter to **withdraw-only mode** rather than immediate full deauthorization — users need time to exit their positions.
 
 **Replacing an adapter:** Deploy the new version, authorize it, then deauthorize the old one (in withdraw-only mode). Both run in parallel during the transition.
 
